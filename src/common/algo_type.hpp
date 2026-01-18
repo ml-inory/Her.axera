@@ -9,15 +9,6 @@
  **************************************************************************************************/
 #pragma once
 
-#include <memory>
-#include "asr/asr_interface.hpp"
-#include "common/algo_type.hpp"
-
-typedef std::shared_ptr<ASRInterface>   ASRIfPtr;
-
-class ASRFactory {
-public:
-    static ASRIfPtr create(ASR_TYPE_E type) {
-        return nullptr;
-    }
+enum class ASR_TYPE_E {
+    WHISPER = 0
 };
