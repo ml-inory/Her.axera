@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.13 FATAL_ERROR)
 project(ax_template)
 
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED True)
 set(CMAKE_CXX_STANDARD 17)
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
