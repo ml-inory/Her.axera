@@ -25,6 +25,7 @@ class Settings:
     default_asr_provider: str = os.getenv("DEFAULT_ASR_PROVIDER", "mock_asr")
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm")
     default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "mock_tts")
+    edge_tts_voice: str = os.getenv("EDGE_TTS_VOICE", "zh-CN-XiaoxiaoNeural")
     llm_request_timeout: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "60"))
     deepseek_api_base: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
     deepseek_api_key: str | None = os.getenv("DEEPSEEK_API_KEY")

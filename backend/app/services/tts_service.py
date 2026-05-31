@@ -1,6 +1,8 @@
 from base64 import b64encode
 from io import BytesIO
 import math
+from pathlib import Path
+import tempfile
 import wave
 from datetime import datetime
 from time import perf_counter
@@ -38,6 +40,18 @@ def _build_mock_wav(text: str, sample_rate: int, duration_ms: int) -> bytes:
     return buffer.getvalue()
 
 
+def _percentage(value: float, *, neutral: float = 1.0, minimum: int = -50, maximum: int = 100) -> str:
+    percent = int(round((value - neutral) * 100))
+    percent = min(max(percent, minimum), maximum)
+    return f"{percent:+d}%"
+
+
+def _pitch(value: float) -> str:
+    hz = int(round((value - 1.0) * 100))
+    hz = min(max(hz, -100), 100)
+    return f"{hz:+d}Hz"
+
+
 class TTSService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -49,7 +63,16 @@ class TTSService:
                 languages=["zh-CN", "en-US"],
                 audio_formats=["wav", "mp3", "pcm", "opus"],
                 features=["speed", "pitch", "volume", "emotion", "segments"],
-            )
+            ),
+            "edge_tts": ProviderInfo(
+                name="edge_tts",
+                type="remote",
+                models=["edge-tts"],
+                languages=["zh-CN", "en-US"],
+                audio_formats=["mp3"],
+                features=["speed", "pitch", "volume"],
+                metadata={"requires_api_key": False},
+            ),
         }
         self.voices = [
             VoiceInfo(
@@ -68,6 +91,54 @@ class TTSService:
                 styles=["neutral"],
                 sample_rates=[16000, 24000],
             ),
+            VoiceInfo(
+                name="zh-CN-XiaoxiaoNeural",
+                display_name="Edge 晓晓",
+                language="zh-CN",
+                gender="female",
+                styles=["neutral"],
+                sample_rates=[24000, 48000],
+            ),
+            VoiceInfo(
+                name="zh-CN-XiaoyiNeural",
+                display_name="Edge 晓伊",
+                language="zh-CN",
+                gender="female",
+                styles=["neutral"],
+                sample_rates=[24000, 48000],
+            ),
+            VoiceInfo(
+                name="zh-CN-YunxiNeural",
+                display_name="Edge 云希",
+                language="zh-CN",
+                gender="male",
+                styles=["neutral"],
+                sample_rates=[24000, 48000],
+            ),
+            VoiceInfo(
+                name="zh-CN-YunjianNeural",
+                display_name="Edge 云健",
+                language="zh-CN",
+                gender="male",
+                styles=["neutral"],
+                sample_rates=[24000, 48000],
+            ),
+            VoiceInfo(
+                name="en-US-JennyNeural",
+                display_name="Edge Jenny",
+                language="en-US",
+                gender="female",
+                styles=["neutral"],
+                sample_rates=[24000, 48000],
+            ),
+            VoiceInfo(
+                name="en-US-GuyNeural",
+                display_name="Edge Guy",
+                language="en-US",
+                gender="male",
+                styles=["neutral"],
+                sample_rates=[24000, 48000],
+            ),
         ]
         self.jobs: dict[str, TTSJobResponse] = {}
 
@@ -79,7 +150,7 @@ class TTSService:
             return self.voices
         return [voice for voice in self.voices if voice.language == language]
 
-    def synthesize(self, trace_id: str, request: SpeechRequest) -> SpeechResponse:
+    async def synthesize(self, trace_id: str, request: SpeechRequest) -> SpeechResponse:
         start = perf_counter()
         provider_name = request.provider or self.settings.default_tts_provider
         provider_info = self.providers.get(provider_name)
@@ -97,6 +168,20 @@ class TTSService:
 
         selected_model = request.model or provider_info.models[0]
         selected_voice = request.voice or "female_default"
+        if provider_name == "edge_tts":
+            return await self._synthesize_edge_tts(trace_id, request, selected_model, selected_voice, start)
+
+        return self._synthesize_mock(trace_id, request, provider_name, selected_model, selected_voice, start)
+
+    def _synthesize_mock(
+        self,
+        trace_id: str,
+        request: SpeechRequest,
+        provider_name: str,
+        selected_model: str,
+        selected_voice: str,
+        start: float,
+    ) -> SpeechResponse:
         duration_ms = max(300, len(request.text) * 120)
         if request.audio_format == "wav":
             audio_content = _build_mock_wav(request.text, request.sample_rate, duration_ms)
@@ -115,6 +200,68 @@ class TTSService:
             audio_format=request.audio_format,
             sample_rate=request.sample_rate,
             duration_ms=duration_ms,
+            processing_ms=int((perf_counter() - start) * 1000),
+            cache_hit=False,
+        )
+
+    async def _synthesize_edge_tts(
+        self,
+        trace_id: str,
+        request: SpeechRequest,
+        selected_model: str,
+        selected_voice: str,
+        start: float,
+    ) -> SpeechResponse:
+        try:
+            import edge_tts
+        except ImportError as exc:
+            raise AppError(
+                "provider_unavailable",
+                "edge-tts is not installed; install backend requirements",
+                status_code=500,
+                stage="tts",
+            ) from exc
+
+        voice_aliases = {
+            "female_default": "zh-CN-XiaoxiaoNeural",
+            "male_default": "zh-CN-YunxiNeural",
+        }
+        voice = voice_aliases.get(selected_voice, selected_voice) or self.settings.edge_tts_voice
+        output_path = Path(tempfile.gettempdir()) / f"her_edge_tts_{uuid4().hex}.mp3"
+
+        try:
+            communicate = edge_tts.Communicate(
+                request.text,
+                voice,
+                rate=_percentage(request.speed),
+                volume=_percentage(request.volume),
+                pitch=_pitch(request.pitch),
+            )
+            await communicate.save(str(output_path))
+            audio_content = output_path.read_bytes()
+        except Exception as exc:  # noqa: BLE001
+            raise AppError(
+                "provider_unavailable",
+                f"Edge TTS synthesis failed: {exc}",
+                status_code=502,
+                stage="tts",
+                retryable=True,
+            ) from exc
+        finally:
+            output_path.unlink(missing_ok=True)
+
+        audio_base64 = b64encode(audio_content).decode("ascii") if request.return_audio_base64 else None
+        return SpeechResponse(
+            trace_id=trace_id,
+            provider="edge_tts",
+            model=selected_model,
+            voice=voice,
+            language=request.language,
+            audio_url=None,
+            audio_base64=audio_base64,
+            audio_format="mp3",
+            sample_rate=request.sample_rate,
+            duration_ms=max(300, len(request.text) * 120),
             processing_ms=int((perf_counter() - start) * 1000),
             cache_hit=False,
         )

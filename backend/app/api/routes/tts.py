@@ -23,7 +23,7 @@ async def create_speech(
     request: SpeechRequest,
     trace_id: Annotated[str, Depends(bind_trace_id)],
 ) -> SpeechResponse:
-    return tts_service.synthesize(trace_id, request)
+    return await tts_service.synthesize(trace_id, request)
 
 
 @router.post("/speech/segments", response_model=SegmentedSpeechResponse)

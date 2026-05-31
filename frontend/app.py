@@ -21,6 +21,20 @@ LLM_PROVIDER_CHOICES = ["mock_llm", "deepseek"]
 DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm")
 if DEFAULT_LLM_PROVIDER not in LLM_PROVIDER_CHOICES:
     DEFAULT_LLM_PROVIDER = "mock_llm"
+TTS_PROVIDER_CHOICES = ["edge_tts", "mock_tts"]
+DEFAULT_TTS_PROVIDER = os.getenv("DEFAULT_TTS_PROVIDER", "edge_tts")
+if DEFAULT_TTS_PROVIDER not in TTS_PROVIDER_CHOICES:
+    DEFAULT_TTS_PROVIDER = "edge_tts"
+VOICE_CHOICES = [
+    "zh-CN-XiaoxiaoNeural",
+    "zh-CN-XiaoyiNeural",
+    "zh-CN-YunxiNeural",
+    "zh-CN-YunjianNeural",
+    "en-US-JennyNeural",
+    "en-US-GuyNeural",
+    "female_default",
+    "male_default",
+]
 
 
 def _normalize_audio_array(audio_data: np.ndarray) -> np.ndarray:
@@ -123,14 +137,15 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
-    def synthesize(self, text: str, voice: str, language: str) -> dict[str, Any]:
+    def synthesize(self, text: str, provider: str, voice: str, language: str) -> dict[str, Any]:
         response = requests.post(
             f"{self.base_url}/v1/tts/speech",
             json={
                 "text": text,
+                "provider": provider,
                 "voice": voice,
                 "language": language,
-                "audio_format": "wav",
+                "audio_format": "mp3" if provider == "edge_tts" else "wav",
                 "sample_rate": 24000,
                 "return_audio_base64": True,
             },
@@ -190,6 +205,7 @@ def _respond(
     llm_provider: str,
     llm_api_key: str,
     language: str,
+    tts_provider: str,
     voice: str,
     enable_vad: bool,
 ) -> tuple[list[dict[str, str]], str, str | None, str, None]:
@@ -213,7 +229,7 @@ def _respond(
             llm_api_key,
         )
         assistant_text = llm_result["message"]["content"]
-        tts_result = client.synthesize(assistant_text, voice, language)
+        tts_result = client.synthesize(assistant_text, tts_provider, voice, language)
 
         output_audio_path = None
         if tts_result.get("audio_base64"):
@@ -241,9 +257,21 @@ def respond(
     llm_provider: str,
     llm_api_key: str,
     language: str,
+    tts_provider: str,
     voice: str,
 ) -> tuple[list[dict[str, str]], str, str | None, str, None]:
-    return _respond(text, audio_path, history, session_id, llm_provider, llm_api_key, language, voice, enable_vad=False)
+    return _respond(
+        text,
+        audio_path,
+        history,
+        session_id,
+        llm_provider,
+        llm_api_key,
+        language,
+        tts_provider,
+        voice,
+        enable_vad=False,
+    )
 
 
 def reset_free_speak(enabled: bool) -> tuple[dict[str, Any], str, Any, Any]:
@@ -260,6 +288,7 @@ def free_speak_stream(
     llm_provider: str,
     llm_api_key: str,
     language: str,
+    tts_provider: str,
     voice: str,
 ) -> tuple[dict[str, Any], Any, Any, Any]:
     state = state or {}
@@ -316,6 +345,7 @@ def free_speak_stream(
             llm_provider,
             llm_api_key,
             language,
+            tts_provider,
             voice,
             enable_vad=False,
         )
@@ -357,7 +387,8 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
         )
         llm_api_key = gr.Textbox(value="", label="LLM API KEY", type="password")
         language = gr.Dropdown(choices=["zh-CN", "en-US"], value="zh-CN", label="语言")
-        voice = gr.Dropdown(choices=["female_default", "male_default"], value="female_default", label="音色")
+        tts_provider = gr.Dropdown(choices=TTS_PROVIDER_CHOICES, value=DEFAULT_TTS_PROVIDER, label="TTS Provider")
+        voice = gr.Dropdown(choices=VOICE_CHOICES, value="zh-CN-XiaoxiaoNeural", label="音色")
         free_speak_enabled = gr.Checkbox(value=False, label="自由说话")
 
     chatbot = gr.Chatbot(label="对话", type="messages", height=460)
@@ -385,12 +416,12 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
 
     send_button.click(
         respond,
-        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, voice],
+        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, tts_provider, voice],
         outputs=[chatbot, text_input, audio_output, status, audio_input],
     )
     text_input.submit(
         respond,
-        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, voice],
+        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, tts_provider, voice],
         outputs=[chatbot, text_input, audio_output, status, audio_input],
     )
     free_speak_enabled.change(
@@ -409,6 +440,7 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
             llm_provider,
             llm_api_key,
             language,
+            tts_provider,
             voice,
         ],
         outputs=[free_speak_state, chatbot, audio_output, status],
