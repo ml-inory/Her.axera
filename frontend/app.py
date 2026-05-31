@@ -97,10 +97,20 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
-    def chat(self, messages: list[dict[str, str]], session_id: str | None) -> dict[str, Any]:
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        session_id: str | None,
+        provider: str | None,
+        api_key: str | None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {"messages": messages, "max_tokens": 512}
         if session_id:
             payload["session_id"] = session_id
+        if provider and provider.strip():
+            payload["provider"] = provider.strip()
+        if api_key and api_key.strip():
+            payload["api_key"] = api_key.strip()
         response = requests.post(
             f"{self.base_url}/v1/llm/chat/completions",
             json=payload,
@@ -173,6 +183,8 @@ def _respond(
     audio_path: str | None,
     history: list[dict[str, str]] | None,
     session_id: str,
+    llm_provider: str,
+    llm_api_key: str,
     language: str,
     voice: str,
     enable_vad: bool,
@@ -190,7 +202,12 @@ def _respond(
             gr.Warning("请输入文字或上传/录制一段语音。")
             return history, "", None, "等待输入。", None
 
-        llm_result = client.chat(_to_llm_messages(history, user_text), session_id.strip() or None)
+        llm_result = client.chat(
+            _to_llm_messages(history, user_text),
+            session_id.strip() or None,
+            llm_provider,
+            llm_api_key,
+        )
         assistant_text = llm_result["message"]["content"]
         tts_result = client.synthesize(assistant_text, voice, language)
 
@@ -217,10 +234,12 @@ def respond(
     audio_path: str | None,
     history: list[dict[str, str]] | None,
     session_id: str,
+    llm_provider: str,
+    llm_api_key: str,
     language: str,
     voice: str,
 ) -> tuple[list[dict[str, str]], str, str | None, str, None]:
-    return _respond(text, audio_path, history, session_id, language, voice, enable_vad=False)
+    return _respond(text, audio_path, history, session_id, llm_provider, llm_api_key, language, voice, enable_vad=False)
 
 
 def reset_free_speak(enabled: bool) -> tuple[dict[str, Any], str, Any, Any]:
@@ -234,6 +253,8 @@ def free_speak_stream(
     state: dict[str, Any] | None,
     history: list[dict[str, str]] | None,
     session_id: str,
+    llm_provider: str,
+    llm_api_key: str,
     language: str,
     voice: str,
 ) -> tuple[dict[str, Any], Any, Any, Any]:
@@ -288,6 +309,8 @@ def free_speak_stream(
             utterance_path,
             history,
             session_id,
+            llm_provider,
+            llm_api_key,
             language,
             voice,
             enable_vad=False,
@@ -323,6 +346,8 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
     with gr.Row():
         api_base = gr.Textbox(value=API_BASE_URL, label="后端地址", interactive=False)
         session_id = gr.Textbox(value="demo-session", label="Session ID")
+        llm_provider = gr.Textbox(value=os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm"), label="LLM Provider")
+        llm_api_key = gr.Textbox(value="", label="LLM API KEY", type="password")
         language = gr.Dropdown(choices=["zh-CN", "en-US"], value="zh-CN", label="语言")
         voice = gr.Dropdown(choices=["female_default", "male_default"], value="female_default", label="音色")
         free_speak_enabled = gr.Checkbox(value=False, label="自由说话")
@@ -352,12 +377,12 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
 
     send_button.click(
         respond,
-        inputs=[text_input, audio_input, chatbot, session_id, language, voice],
+        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, voice],
         outputs=[chatbot, text_input, audio_output, status, audio_input],
     )
     text_input.submit(
         respond,
-        inputs=[text_input, audio_input, chatbot, session_id, language, voice],
+        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, voice],
         outputs=[chatbot, text_input, audio_output, status, audio_input],
     )
     free_speak_enabled.change(
@@ -367,7 +392,17 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
     )
     free_audio_input.stream(
         free_speak_stream,
-        inputs=[free_audio_input, free_speak_enabled, free_speak_state, chatbot, session_id, language, voice],
+        inputs=[
+            free_audio_input,
+            free_speak_enabled,
+            free_speak_state,
+            chatbot,
+            session_id,
+            llm_provider,
+            llm_api_key,
+            language,
+            voice,
+        ],
         outputs=[free_speak_state, chatbot, audio_output, status],
         stream_every=0.5,
         concurrency_limit=1,

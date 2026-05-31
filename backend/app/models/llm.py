@@ -21,6 +21,7 @@ class ChatCompletionRequest(BaseModel):
     session_id: str | None = None
     user_id: str | None = None
     provider: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     model: str | None = None
     system_prompt: str | None = None
     temperature: float = 0.7
