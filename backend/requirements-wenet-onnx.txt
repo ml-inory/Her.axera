@@ -1,0 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+onnxruntime
+pyyaml>=5.1
+soundfile
+torch
+torchaudio

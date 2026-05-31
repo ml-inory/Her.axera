@@ -3,9 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.api.deps import bind_trace_id
-from app.models.asr import ASRJobResponse, ASRProvidersResponse, ASRResult
+from app.models.asr import ASRJobResponse, ASRProvidersResponse, ASRResult, VADDetectionResponse
 from app.models.common import JobCreatedResponse
 from app.services.asr_service import asr_service
+from app.services.vad_service import vad_service
 
 router = APIRouter(prefix="/asr", tags=["asr"])
 
@@ -18,6 +19,7 @@ async def create_transcription(
     model: Annotated[str | None, Form()] = None,
     language: Annotated[str | None, Form()] = None,
     enable_timestamps: Annotated[bool, Form()] = False,
+    enable_vad: Annotated[bool, Form()] = False,
 ) -> ASRResult:
     content = await audio.read()
     return await asr_service.transcribe(
@@ -28,6 +30,22 @@ async def create_transcription(
         model=model,
         language=language,
         enable_timestamps=enable_timestamps,
+        enable_vad=enable_vad,
+    )
+
+
+@router.post("/vad/segments", response_model=VADDetectionResponse)
+async def detect_vad_segments(
+    trace_id: Annotated[str, Depends(bind_trace_id)],
+    audio: Annotated[UploadFile, File()],
+) -> VADDetectionResponse:
+    content = await audio.read()
+    result = vad_service.detect_speech(content, audio.filename)
+    return VADDetectionResponse(
+        trace_id=trace_id,
+        segments=result.segments,
+        speech_duration_ms=result.speech_duration_ms,
+        processing_ms=result.processing_ms,
     )
 
 

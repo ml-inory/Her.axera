@@ -14,6 +14,12 @@ class ASRSegment(BaseModel):
     speaker: str | None = None
 
 
+class VADSegment(BaseModel):
+    index: int
+    start_ms: int
+    end_ms: int
+
+
 class ASRResult(BaseModel):
     trace_id: str
     provider: str
@@ -25,6 +31,9 @@ class ASRResult(BaseModel):
     processing_ms: int
     segments: list[ASRSegment] = Field(default_factory=list)
     words: list[dict[str, Any]] = Field(default_factory=list)
+    vad_segments: list[VADSegment] = Field(default_factory=list)
+    speech_duration_ms: int | None = None
+    vad_processing_ms: int | None = None
 
 
 class ASRJobResponse(BaseModel):
@@ -37,3 +46,10 @@ class ASRJobResponse(BaseModel):
 class ASRProvidersResponse(BaseModel):
     trace_id: str
     providers: list[ProviderInfo]
+
+
+class VADDetectionResponse(BaseModel):
+    trace_id: str
+    segments: list[VADSegment] = Field(default_factory=list)
+    speech_duration_ms: int
+    processing_ms: int

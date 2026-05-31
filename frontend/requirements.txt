@@ -1,2 +1,3 @@
+# Browser microphone recordings require ffmpeg/ffprobe on PATH for Gradio audio decoding.
 gradio>=4.44.0,<6.0.0
 requests>=2.32.0,<3.0.0
