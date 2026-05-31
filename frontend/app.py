@@ -17,6 +17,10 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 FREE_SPEAK_SILENCE_MS = int(os.getenv("FREE_SPEAK_SILENCE_MS", "1000"))
 FREE_SPEAK_MIN_UTTERANCE_MS = int(os.getenv("FREE_SPEAK_MIN_UTTERANCE_MS", "600"))
 FREE_SPEAK_MAX_BUFFER_MS = int(os.getenv("FREE_SPEAK_MAX_BUFFER_MS", "30000"))
+LLM_PROVIDER_CHOICES = ["mock_llm", "deepseek"]
+DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm")
+if DEFAULT_LLM_PROVIDER not in LLM_PROVIDER_CHOICES:
+    DEFAULT_LLM_PROVIDER = "mock_llm"
 
 
 def _normalize_audio_array(audio_data: np.ndarray) -> np.ndarray:
@@ -346,7 +350,11 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
     with gr.Row():
         api_base = gr.Textbox(value=API_BASE_URL, label="后端地址", interactive=False)
         session_id = gr.Textbox(value="demo-session", label="Session ID")
-        llm_provider = gr.Textbox(value=os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm"), label="LLM Provider")
+        llm_provider = gr.Dropdown(
+            choices=LLM_PROVIDER_CHOICES,
+            value=DEFAULT_LLM_PROVIDER,
+            label="LLM Provider",
+        )
         llm_api_key = gr.Textbox(value="", label="LLM API KEY", type="password")
         language = gr.Dropdown(choices=["zh-CN", "en-US"], value="zh-CN", label="语言")
         voice = gr.Dropdown(choices=["female_default", "male_default"], value="female_default", label="音色")

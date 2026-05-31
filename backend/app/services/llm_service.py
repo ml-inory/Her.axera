@@ -2,6 +2,8 @@ from datetime import datetime
 from time import perf_counter
 from uuid import uuid4
 
+import requests
+
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.models.common import JobCreatedResponse, ProviderInfo
@@ -20,6 +22,17 @@ from app.models.llm import (
 class LLMService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        deepseek_models = list(
+            dict.fromkeys(
+                [
+                    self.settings.deepseek_model,
+                    "deepseek-v4-pro",
+                    "deepseek-v4-flash",
+                    "deepseek-chat",
+                    "deepseek-reasoner",
+                ]
+            )
+        )
         self.providers = {
             "mock_llm": ProviderInfo(
                 name="mock_llm",
@@ -28,7 +41,15 @@ class LLMService:
                 languages=["zh-CN", "en-US"],
                 features=["chat", "json_output", "tool_calls"],
                 metadata={"max_context_tokens": 32768},
-            )
+            ),
+            "deepseek": ProviderInfo(
+                name="deepseek",
+                type="remote",
+                models=deepseek_models,
+                languages=["zh-CN", "en-US"],
+                features=["chat", "json_output"],
+                metadata={"api_base": self.settings.deepseek_api_base, "openai_compatible": True},
+            ),
         }
         self.sessions: dict[str, list[ChatMessage]] = {}
         self.jobs: dict[str, LLMJobResponse] = {}
@@ -51,6 +72,19 @@ class LLMService:
             raise AppError("invalid_request", "messages must not be empty", status_code=400, stage="llm")
 
         selected_model = request.model or provider_info.models[0]
+        if provider_name == "deepseek":
+            return self._chat_deepseek(trace_id, request, selected_model, start)
+
+        return self._chat_mock(trace_id, request, provider_name, selected_model, start)
+
+    def _chat_mock(
+        self,
+        trace_id: str,
+        request: ChatCompletionRequest,
+        provider_name: str,
+        selected_model: str,
+        start: float,
+    ) -> ChatCompletionResponse:
         latest_user_text = next((msg.content for msg in reversed(request.messages) if msg.role == "user"), "")
         content = f"收到：{latest_user_text}"
         if request.response_format and request.response_format.get("type") == "json_schema":
@@ -76,6 +110,100 @@ class LLMService:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+            ),
+            safety=SafetyResult(blocked=False, categories=[]),
+            processing_ms=int((perf_counter() - start) * 1000),
+        )
+
+    def _chat_deepseek(
+        self,
+        trace_id: str,
+        request: ChatCompletionRequest,
+        selected_model: str,
+        start: float,
+    ) -> ChatCompletionResponse:
+        api_key = (request.api_key or self.settings.deepseek_api_key or "").strip()
+        if not api_key:
+            raise AppError(
+                "missing_api_key",
+                "DeepSeek API KEY is required",
+                status_code=400,
+                stage="llm",
+            )
+
+        payload: dict[str, object] = {
+            "model": selected_model or self.settings.deepseek_model,
+            "messages": [{"role": msg.role, "content": msg.content} for msg in request.messages],
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "max_tokens": request.max_tokens,
+        }
+        if request.stop:
+            payload["stop"] = request.stop
+        if request.response_format:
+            payload["response_format"] = request.response_format
+
+        try:
+            response = requests.post(
+                f"{self.settings.deepseek_api_base}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self.settings.llm_request_timeout,
+            )
+        except requests.RequestException as exc:
+            raise AppError(
+                "provider_unavailable",
+                f"DeepSeek request failed: {exc}",
+                status_code=502,
+                stage="llm",
+                retryable=True,
+            ) from exc
+
+        if response.status_code >= 400:
+            raise AppError(
+                "provider_error",
+                f"DeepSeek returned {response.status_code}: {response.text[:500]}",
+                status_code=502,
+                stage="llm",
+                retryable=response.status_code >= 500,
+            )
+
+        data = response.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise AppError("provider_error", "DeepSeek returned no choices", status_code=502, stage="llm")
+
+        choice = choices[0]
+        response_message = choice.get("message") or {}
+        content = response_message.get("content") or ""
+        usage = data.get("usage") or {}
+        finish_reason = choice.get("finish_reason") or "stop"
+        if finish_reason not in {"stop", "length", "tool_calls", "content_filter"}:
+            finish_reason = "stop"
+
+        message = ChatMessage(role="assistant", content=content)
+        session_id = request.session_id
+        if session_id:
+            history = self.sessions.setdefault(session_id, [])
+            history.extend(request.messages)
+            history.append(message)
+
+        prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+        return ChatCompletionResponse(
+            trace_id=trace_id,
+            session_id=session_id,
+            provider="deepseek",
+            model=data.get("model") or selected_model,
+            message=message,
+            finish_reason=finish_reason,
+            usage=TokenUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=int(usage.get("total_tokens") or prompt_tokens + completion_tokens),
             ),
             safety=SafetyResult(blocked=False, categories=[]),
             processing_ms=int((perf_counter() - start) * 1000),
