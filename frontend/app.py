@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import os
 import tempfile
 import wave
@@ -17,6 +16,10 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 FREE_SPEAK_SILENCE_MS = int(os.getenv("FREE_SPEAK_SILENCE_MS", "1000"))
 FREE_SPEAK_MIN_UTTERANCE_MS = int(os.getenv("FREE_SPEAK_MIN_UTTERANCE_MS", "600"))
 FREE_SPEAK_MAX_BUFFER_MS = int(os.getenv("FREE_SPEAK_MAX_BUFFER_MS", "30000"))
+ASR_PROVIDER_CHOICES = [item.strip() for item in os.getenv("ASR_PROVIDER_CHOICES", "mock_asr,wenet_onnx,sensevoice").split(",") if item.strip()]
+DEFAULT_ASR_PROVIDER = os.getenv("DEFAULT_ASR_PROVIDER", "mock_asr")
+if DEFAULT_ASR_PROVIDER not in ASR_PROVIDER_CHOICES:
+    DEFAULT_ASR_PROVIDER = ASR_PROVIDER_CHOICES[0]
 LLM_PROVIDER_CHOICES = ["mock_llm", "deepseek"]
 DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm")
 if DEFAULT_LLM_PROVIDER not in LLM_PROVIDER_CHOICES:
@@ -79,15 +82,24 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
-    def transcribe(self, audio: str | tuple[int, np.ndarray], language: str, enable_vad: bool = False) -> dict[str, Any]:
+    def transcribe(
+        self,
+        audio: str | tuple[int, np.ndarray],
+        language: str,
+        provider: str | None,
+        enable_vad: bool = False,
+    ) -> dict[str, Any]:
         audio_path, should_delete = _materialize_audio(audio)
         try:
             return self._post_audio(
-                endpoint="/v1/asr/transcriptions",
+                endpoint="/v1/audio/transcriptions",
                 audio_path=audio_path,
+                field_name="file",
                 data={
+                    "model": provider.strip() if provider and provider.strip() else "whisper-1",
+                    "provider": provider.strip() if provider and provider.strip() else "",
                     "language": language,
-                    "enable_timestamps": "true",
+                    "response_format": "verbose_json",
                     "enable_vad": "true" if enable_vad else "false",
                 },
             )
@@ -98,14 +110,14 @@ class BackendClient:
     def detect_vad(self, audio: str | tuple[int, np.ndarray]) -> dict[str, Any]:
         audio_path, should_delete = _materialize_audio(audio)
         try:
-            return self._post_audio(endpoint="/v1/asr/vad/segments", audio_path=audio_path, data={})
+            return self._post_audio(endpoint="/v1/audio/transcriptions", audio_path=audio_path, field_name="file", data={"model": "mock_asr", "response_format": "verbose_json"})
         finally:
             if should_delete:
                 Path(audio_path).unlink(missing_ok=True)
 
-    def _post_audio(self, *, endpoint: str, audio_path: str, data: dict[str, str]) -> dict[str, Any]:
+    def _post_audio(self, *, endpoint: str, audio_path: str, data: dict[str, str], field_name: str = "file") -> dict[str, Any]:
         with open(audio_path, "rb") as audio_file:
-            files = {"audio": (Path(audio_path).name, audio_file, "application/octet-stream")}
+            files = {field_name: (Path(audio_path).name, audio_file, "application/octet-stream")}
             response = requests.post(
                 f"{self.base_url}{endpoint}",
                 files=files,
@@ -122,7 +134,8 @@ class BackendClient:
         provider: str | None,
         api_key: str | None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"messages": messages, "max_tokens": 512}
+        selected_model = provider.strip() if provider and provider.strip() else "mock_llm"
+        payload: dict[str, Any] = {"model": selected_model, "messages": messages, "max_tokens": 512}
         if session_id:
             payload["session_id"] = session_id
         if provider and provider.strip():
@@ -130,7 +143,7 @@ class BackendClient:
         if api_key and api_key.strip():
             payload["api_key"] = api_key.strip()
         response = requests.post(
-            f"{self.base_url}/v1/llm/chat/completions",
+            f"{self.base_url}/v1/chat/completions",
             json=payload,
             timeout=REQUEST_TIMEOUT,
         )
@@ -138,21 +151,30 @@ class BackendClient:
         return response.json()
 
     def synthesize(self, text: str, provider: str, voice: str, language: str) -> dict[str, Any]:
+        audio_format = "mp3" if provider == "edge_tts" else "wav"
         response = requests.post(
-            f"{self.base_url}/v1/tts/speech",
+            f"{self.base_url}/v1/audio/speech",
             json={
-                "text": text,
+                "model": provider,
                 "provider": provider,
+                "input": text,
                 "voice": voice,
                 "language": language,
-                "audio_format": "mp3" if provider == "edge_tts" else "wav",
+                "response_format": audio_format,
                 "sample_rate": 24000,
-                "return_audio_base64": True,
             },
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        suffix = f".{audio_format}"
+        path = Path(tempfile.gettempdir()) / f"her_tts_{uuid4().hex}{suffix}"
+        path.write_bytes(response.content)
+        return {
+            "audio_path": str(path),
+            "provider": response.headers.get("X-Provider", provider),
+            "model": response.headers.get("X-Model", provider),
+            "audio_format": audio_format,
+        }
 
 
 client = BackendClient(API_BASE_URL)
@@ -170,12 +192,6 @@ def _to_llm_messages(history: list[dict[str, str]], user_text: str) -> list[dict
     messages.append({"role": "user", "content": user_text})
     return messages
 
-
-def _save_audio_base64(audio_base64: str, audio_format: str) -> str:
-    suffix = f".{audio_format or 'wav'}"
-    path = Path(tempfile.gettempdir()) / f"her_tts_{uuid4().hex}{suffix}"
-    path.write_bytes(base64.b64decode(audio_base64))
-    return str(path)
 
 
 def _format_status(asr_result: dict[str, Any] | None, llm_result: dict[str, Any], tts_result: dict[str, Any]) -> str:
@@ -202,6 +218,7 @@ def _respond(
     audio_path: str | None,
     history: list[dict[str, str]] | None,
     session_id: str,
+    asr_provider: str,
     llm_provider: str,
     llm_api_key: str,
     language: str,
@@ -215,7 +232,7 @@ def _respond(
 
     try:
         if audio_path:
-            asr_result = client.transcribe(audio_path, language, enable_vad=enable_vad)
+            asr_result = client.transcribe(audio_path, language, asr_provider, enable_vad=enable_vad)
             user_text = asr_result.get("text", "").strip() or user_text
 
         if not user_text:
@@ -228,12 +245,10 @@ def _respond(
             llm_provider,
             llm_api_key,
         )
-        assistant_text = llm_result["message"]["content"]
+        assistant_text = llm_result["choices"][0]["message"]["content"]
         tts_result = client.synthesize(assistant_text, tts_provider, voice, language)
 
-        output_audio_path = None
-        if tts_result.get("audio_base64"):
-            output_audio_path = _save_audio_base64(tts_result["audio_base64"], tts_result.get("audio_format", "wav"))
+        output_audio_path = tts_result.get("audio_path")
 
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": assistant_text})
@@ -254,6 +269,7 @@ def respond(
     audio_path: str | None,
     history: list[dict[str, str]] | None,
     session_id: str,
+    asr_provider: str,
     llm_provider: str,
     llm_api_key: str,
     language: str,
@@ -265,6 +281,7 @@ def respond(
         audio_path,
         history,
         session_id,
+        asr_provider,
         llm_provider,
         llm_api_key,
         language,
@@ -285,6 +302,7 @@ def free_speak_stream(
     state: dict[str, Any] | None,
     history: list[dict[str, str]] | None,
     session_id: str,
+    asr_provider: str,
     llm_provider: str,
     llm_api_key: str,
     language: str,
@@ -342,6 +360,7 @@ def free_speak_stream(
             utterance_path,
             history,
             session_id,
+            asr_provider,
             llm_provider,
             llm_api_key,
             language,
@@ -380,6 +399,11 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
     with gr.Row():
         api_base = gr.Textbox(value=API_BASE_URL, label="后端地址", interactive=False)
         session_id = gr.Textbox(value="demo-session", label="Session ID")
+        asr_provider = gr.Dropdown(
+            choices=ASR_PROVIDER_CHOICES,
+            value=DEFAULT_ASR_PROVIDER,
+            label="ASR Provider",
+        )
         llm_provider = gr.Dropdown(
             choices=LLM_PROVIDER_CHOICES,
             value=DEFAULT_LLM_PROVIDER,
@@ -416,12 +440,12 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
 
     send_button.click(
         respond,
-        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, tts_provider, voice],
+        inputs=[text_input, audio_input, chatbot, session_id, asr_provider, llm_provider, llm_api_key, language, tts_provider, voice],
         outputs=[chatbot, text_input, audio_output, status, audio_input],
     )
     text_input.submit(
         respond,
-        inputs=[text_input, audio_input, chatbot, session_id, llm_provider, llm_api_key, language, tts_provider, voice],
+        inputs=[text_input, audio_input, chatbot, session_id, asr_provider, llm_provider, llm_api_key, language, tts_provider, voice],
         outputs=[chatbot, text_input, audio_output, status, audio_input],
     )
     free_speak_enabled.change(
@@ -437,6 +461,7 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
             free_speak_state,
             chatbot,
             session_id,
+            asr_provider,
             llm_provider,
             llm_api_key,
             language,

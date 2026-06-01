@@ -1,6 +1,6 @@
 # Her Voice Backend
 
-这是语音对话系统的 Python 后端骨架，基于 FastAPI 实现，当前提供 ASR、LLM、TTS 三类 RESTful API，并使用 mock provider 作为可替换的服务层占位实现。
+这是语音对话系统的 Python 后端骨架，基于 FastAPI 实现，当前提供 OpenAI-Compatible 的 ASR、LLM、TTS 三类 RESTful API，并使用 mock provider 作为可替换的服务层占位实现。
 
 ## 目录结构
 
@@ -36,19 +36,20 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ### ASR
 
 ```bash
-curl -X POST "http://localhost:8080/v1/asr/transcriptions" \
-  -F "audio=@input.wav" \
+curl -X POST "http://localhost:8080/v1/audio/transcriptions" \
+  -F "file=@input.wav" \
+  -F "model=mock_asr" \
   -F "language=zh-CN" \
-  -F "enable_timestamps=true"
+  -F "response_format=verbose_json"
 ```
 
 ### LLM
 
 ```bash
-curl -X POST "http://localhost:8080/v1/llm/chat/completions" \
+curl -X POST "http://localhost:8080/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
-    "session_id": "ses_demo",
+    "model": "mock_llm",
     "messages": [
       {"role": "user", "content": "帮我打开客厅的灯。"}
     ]
@@ -58,21 +59,27 @@ curl -X POST "http://localhost:8080/v1/llm/chat/completions" \
 ### TTS
 
 ```bash
-curl -X POST "http://localhost:8080/v1/tts/speech" \
+curl -X POST "http://localhost:8080/v1/audio/speech" \
   -H "Content-Type: application/json" \
+  --output reply.wav \
   -d '{
-    "text": "你好，我是你的语音助手。",
-    "voice": "female_default",
-    "audio_format": "wav"
+    "model": "mock_tts",
+    "input": "你好，我是你的语音助手。",
+    "voice": "alloy",
+    "response_format": "wav"
   }'
 ```
 
 ## 后续接入点
 
-- 在 `app/services/asr_service.py` 中替换 `mock_asr` 为真实 ASR Provider。
+- 对外统一使用 OpenAI-Compatible 路由，Provider 接入仍在 `app/services/*_service.py` 中扩展。
 - 在 `app/services/llm_service.py` 中替换 `mock_llm` 为真实 LLM Provider。
 - 在 `app/services/tts_service.py` 中替换 `mock_tts` 为真实 TTS Provider。
 - 如需鉴权，可在 `app/api/deps.py` 中增加 token 校验依赖。
+
+## SenseVoice ASR Provider
+
+后端已支持可选的 `sensevoice` ASR Provider，模型与部署说明见 `../docs/sensevoice_asr_provider.md`。启用时需要设置 `ENABLE_SENSEVOICE_ASR=true` 和 `SENSEVOICE_REPO_PATH=/path/to/SenseVoice`；如需默认使用，可设置 `DEFAULT_ASR_PROVIDER=sensevoice`。
 
 ## 前端 Demo
 

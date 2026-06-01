@@ -1,8 +1,11 @@
+import ast
 from datetime import datetime
 import importlib.util
 import os
+import re
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 from time import perf_counter
 from types import ModuleType
@@ -152,6 +155,204 @@ class WenetONNXProvider:
         return module
 
 
+
+class SenseVoiceProvider:
+    name = "sensevoice"
+    language_aliases = {
+        "auto": "auto",
+        "zh": "zh",
+        "zh-cn": "zh",
+        "zh-tw": "zh",
+        "cmn": "zh",
+        "en": "en",
+        "en-us": "en",
+        "en-gb": "en",
+        "yue": "yue",
+        "ja": "ja",
+        "ja-jp": "ja",
+        "ko": "ko",
+        "ko-kr": "ko",
+    }
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+
+    def info(self) -> ProviderInfo:
+        return ProviderInfo(
+            name=self.name,
+            type="local",
+            models=[
+                "sensevoice_ax650/sensevoice.axmodel",
+                "sensevoice_ax650/streaming_sensevoice.axmodel",
+                "sensevoice_ax630c/sensevoice.axmodel",
+                "sensevoice_ax630c/streaming_sensevoice.axmodel",
+            ],
+            languages=["auto", "zh", "en", "yue", "ja", "ko"],
+            audio_formats=["wav", "mp3", "flac", "pcm", "opus"],
+            features=["axengine", "multilingual", "language_auto_detect", "streaming", "vad_compatible"],
+            metadata={
+                "source_repo": "https://huggingface.co/AXERA-TECH/SenseVoice",
+                "python_entrypoint": "python/main.py",
+                "python_requires": "3.12",
+                "runtime": "pyaxengine==0.1.3rc2",
+                "platforms": ["AX650N", "AX630C"],
+                "repo_path": self.settings.sensevoice_repo_path,
+                "streaming": self.settings.sensevoice_streaming,
+            },
+        )
+
+    def transcribe(
+        self,
+        audio_content: bytes,
+        filename: str | None,
+        language: str | None,
+    ) -> tuple[str, dict[str, str | int | bool | None]]:
+        if not audio_content:
+            raise AppError("asr_no_speech", "Audio payload is empty", status_code=422, stage="asr")
+
+        repo_path = self._required_repo_path()
+        script_path = self._resolve_entrypoint(repo_path)
+        selected_language = self._normalize_language(language or self.settings.sensevoice_language)
+        suffix = Path(filename or "audio.wav").suffix or ".wav"
+
+        with tempfile.NamedTemporaryFile(prefix="her_sensevoice_", suffix=suffix, delete=False) as audio_file:
+            audio_file.write(audio_content)
+            audio_path = audio_file.name
+
+        command = [self.settings.sensevoice_python, str(script_path), "--input", audio_path, "--language", selected_language]
+        if self.settings.sensevoice_streaming:
+            command.append("--streaming")
+
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(script_path.parent),
+                capture_output=True,
+                text=True,
+                timeout=self.settings.sensevoice_timeout_sec,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AppError(
+                "sensevoice_timeout",
+                f"SenseVoice transcription timed out after {self.settings.sensevoice_timeout_sec}s",
+                status_code=504,
+                stage="asr",
+                retryable=True,
+            ) from exc
+        except OSError as exc:
+            raise AppError(
+                "sensevoice_invocation_failed",
+                f"Failed to execute SenseVoice command: {exc}",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            ) from exc
+        finally:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+
+        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+        if completed.returncode != 0:
+            raise AppError(
+                "sensevoice_provider_error",
+                f"SenseVoice exited with code {completed.returncode}: {output[-1200:]}",
+                status_code=502,
+                stage="asr",
+                retryable=True,
+            )
+
+        text = self._parse_transcription(completed.stdout)
+        if not text:
+            raise AppError(
+                "sensevoice_empty_result",
+                f"SenseVoice completed but no transcription text was parsed: {output[-1200:]}",
+                status_code=502,
+                stage="asr",
+                retryable=True,
+            )
+
+        model_name = "sensevoice_ax650/streaming_sensevoice.axmodel" if self.settings.sensevoice_streaming else "sensevoice_ax650/sensevoice.axmodel"
+        return text, {
+            "language": selected_language,
+            "model": model_name,
+            "repo_path": str(repo_path),
+            "entrypoint": str(script_path),
+            "streaming": self.settings.sensevoice_streaming,
+        }
+
+    def _required_repo_path(self) -> Path:
+        if not self.settings.sensevoice_repo_path:
+            raise AppError(
+                "sensevoice_not_configured",
+                "SENSEVOICE_REPO_PATH is required for ASR provider sensevoice",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            )
+        repo_path = Path(self.settings.sensevoice_repo_path).expanduser().resolve()
+        if not repo_path.exists():
+            raise AppError(
+                "sensevoice_path_not_found",
+                f"SENSEVOICE_REPO_PATH does not exist: {repo_path}",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            )
+        return repo_path
+
+    def _resolve_entrypoint(self, repo_path: Path) -> Path:
+        candidates = [repo_path / "python" / "main.py", repo_path / "main.py"]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise AppError(
+            "sensevoice_repo_invalid",
+            f"SenseVoice main.py was not found under {repo_path} or {repo_path / 'python'}",
+            status_code=503,
+            stage="asr",
+            retryable=True,
+        )
+
+    def _normalize_language(self, language: str | None) -> str:
+        normalized = (language or "auto").strip().lower().replace("_", "-")
+        if normalized not in self.language_aliases:
+            raise AppError(
+                "unsupported_language",
+                f"SenseVoice language must be one of auto, zh, en, yue, ja, ko; got {language}",
+                status_code=422,
+                stage="asr",
+            )
+        return self.language_aliases[normalized]
+
+    def _parse_transcription(self, stdout: str) -> str:
+        lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+        for line in reversed(lines):
+            try:
+                value = ast.literal_eval(line)
+            except (ValueError, SyntaxError):
+                value = None
+            if isinstance(value, list) and value:
+                return "".join(str(item) for item in value).strip()
+            if isinstance(value, dict) and value.get("text"):
+                return str(value["text"]).strip()
+
+        for line in reversed(lines):
+            match = re.search(r"(?:asr result|result|text|transcription)\s*[:：]\s*(.+)$", line, re.IGNORECASE)
+            if match:
+                return match.group(1).strip().strip('"\'')
+        for line in reversed(lines):
+            lowered = line.lower()
+            if lowered.startswith(("[info]", "load", "init", "time", "warning", "cost", "rtf", "latency", "total")):
+                continue
+            if set(line) <= {"-", "=", "*"}:
+                continue
+            return line.strip().strip('"\'')
+        return ""
+
+
 class ASRService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -168,6 +369,9 @@ class ASRService:
         self.wenet_provider = WenetONNXProvider()
         if self._should_register_wenet():
             self.providers[self.wenet_provider.name] = self.wenet_provider.info()
+        self.sensevoice_provider = SenseVoiceProvider()
+        if self._should_register_sensevoice():
+            self.providers[self.sensevoice_provider.name] = self.sensevoice_provider.info()
         self.jobs: dict[str, ASRJobResponse] = {}
 
     def list_providers(self) -> list[ProviderInfo]:
@@ -185,6 +389,13 @@ class ASRService:
                     self.settings.wenet_vocab_path,
                 )
             )
+        )
+
+    def _should_register_sensevoice(self) -> bool:
+        return (
+            self.settings.enable_sensevoice_asr
+            or self.settings.default_asr_provider == self.sensevoice_provider.name
+            or bool(self.settings.sensevoice_repo_path)
         )
 
     async def transcribe(
@@ -236,6 +447,39 @@ class ASRService:
             text, _metadata = self.wenet_provider.transcribe(transcribe_audio, transcribe_filename)
             processing_ms = int((perf_counter() - start) * 1000)
             duration_ms = speech_duration_ms or max(1000, min(len(audio_content) // 16, 60000))
+            segments = []
+            if enable_timestamps:
+                segments.append(
+                    ASRSegment(
+                        index=0,
+                        start_ms=0,
+                        end_ms=duration_ms,
+                        text=text,
+                        confidence=None,
+                        speaker="spk_0",
+                    )
+                )
+            return ASRResult(
+                trace_id=trace_id,
+                provider=provider_name,
+                model=selected_model,
+                language=selected_language,
+                text=text,
+                confidence=0.0,
+                duration_ms=duration_ms,
+                processing_ms=processing_ms,
+                segments=segments,
+                vad_segments=vad_segments,
+                speech_duration_ms=speech_duration_ms,
+                vad_processing_ms=vad_processing_ms,
+            )
+
+        if provider_name == self.sensevoice_provider.name:
+            text, metadata = self.sensevoice_provider.transcribe(transcribe_audio, transcribe_filename, selected_language)
+            processing_ms = int((perf_counter() - start) * 1000)
+            duration_ms = speech_duration_ms or max(1000, min(len(audio_content) // 16, 60000))
+            selected_model = model or str(metadata.get("model") or provider_info.models[0])
+            selected_language = str(metadata.get("language") or selected_language)
             segments = []
             if enable_timestamps:
                 segments.append(

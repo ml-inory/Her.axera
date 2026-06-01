@@ -4,6 +4,7 @@
 
 - 文字输入
 - 麦克风录音输入
+- ASR Provider 下拉选择
 - 音频文件上传输入
 - 聊天历史展示
 - TTS 语音回复播放
@@ -12,8 +13,8 @@
 前端通过 RESTful API 调用后端：
 
 ```text
-语音输入 -> /v1/asr/transcriptions -> /v1/llm/chat/completions -> /v1/tts/speech -> 语音播放
-文字输入 ---------------------------> /v1/llm/chat/completions -> /v1/tts/speech -> 语音播放
+语音输入 -> /v1/audio/transcriptions -> /v1/chat/completions -> /v1/audio/speech -> 语音播放
+文字输入 ---------------------------> /v1/chat/completions -> /v1/audio/speech -> 语音播放
 ```
 
 ## 启动后端
@@ -49,6 +50,8 @@ http://127.0.0.1:7860
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | API_BASE_URL | `http://127.0.0.1:8080` | 后端 API 地址。 |
+| ASR_PROVIDER_CHOICES | `mock_asr,wenet_onnx,sensevoice` | ASR 下拉框可选 Provider，逗号分隔。 |
+| DEFAULT_ASR_PROVIDER | `mock_asr` | 默认 ASR Provider。 |
 | REQUEST_TIMEOUT | `60` | 后端请求超时时间，单位秒。 |
 | FRONTEND_HOST | `0.0.0.0` | Gradio 服务监听地址。 |
 | FRONTEND_PORT | `7860` | Gradio 服务端口。 |
