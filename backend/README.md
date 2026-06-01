@@ -81,6 +81,10 @@ curl -X POST "http://localhost:8080/v1/audio/speech" \
 
 后端已支持可选的 `sensevoice` ASR Provider，模型与部署说明见 `../docs/sensevoice_asr_provider.md`。启用时需要设置 `ENABLE_SENSEVOICE_ASR=true` 和 `SENSEVOICE_REPO_PATH=/path/to/SenseVoice`；如需默认使用，可设置 `DEFAULT_ASR_PROVIDER=sensevoice`。
 
+## FireRedASR-AED ASR Provider
+
+后端已支持可选的 `fireredasr_aed` ASR Provider，模型与部署说明见 `../docs/fireredasr_aed_asr_provider.md`。启用时需要通过 hf-mirror 获取 `AXERA-TECH/FireRedASR-AED`，并设置 `ENABLE_FIREREDASR_ASR=true` 与 `FIREREDASR_REPO_PATH=/path/to/FireRedASR-AED`。
+
 ## 前端 Demo
 
 Gradio 前端位于 `../frontend`，启动后可通过网页进行文字和语音对话测试。详见 `../frontend/README.md`。

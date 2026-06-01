@@ -72,6 +72,8 @@ def _infer_asr_provider(model: str, provider: str | None) -> tuple[str | None, s
         return model, None
     if model.startswith("sensevoice"):
         return "sensevoice", model
+    if model in {"fireredasr_aed", "fireredasr-aed-ax650n"} or model.startswith("firered"):
+        return "fireredasr_aed", None if model == "fireredasr_aed" else model
     if model.startswith("wenet"):
         return "wenet_onnx", model
     if model.startswith("mock") or model in {"whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"}:

@@ -50,7 +50,7 @@ http://127.0.0.1:7860
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | API_BASE_URL | `http://127.0.0.1:8080` | 后端 API 地址。 |
-| ASR_PROVIDER_CHOICES | `mock_asr,wenet_onnx,sensevoice` | ASR 下拉框可选 Provider，逗号分隔。 |
+| ASR_PROVIDER_CHOICES | `mock_asr,wenet_onnx,sensevoice,fireredasr_aed` | ASR 下拉框可选 Provider，逗号分隔。 |
 | DEFAULT_ASR_PROVIDER | `mock_asr` | 默认 ASR Provider。 |
 | REQUEST_TIMEOUT | `60` | 后端请求超时时间，单位秒。 |
 | FRONTEND_HOST | `0.0.0.0` | Gradio 服务监听地址。 |

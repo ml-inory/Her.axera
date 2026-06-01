@@ -16,7 +16,11 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 FREE_SPEAK_SILENCE_MS = int(os.getenv("FREE_SPEAK_SILENCE_MS", "1000"))
 FREE_SPEAK_MIN_UTTERANCE_MS = int(os.getenv("FREE_SPEAK_MIN_UTTERANCE_MS", "600"))
 FREE_SPEAK_MAX_BUFFER_MS = int(os.getenv("FREE_SPEAK_MAX_BUFFER_MS", "30000"))
-ASR_PROVIDER_CHOICES = [item.strip() for item in os.getenv("ASR_PROVIDER_CHOICES", "mock_asr,wenet_onnx,sensevoice").split(",") if item.strip()]
+ASR_PROVIDER_CHOICES = [
+    item.strip()
+    for item in os.getenv("ASR_PROVIDER_CHOICES", "mock_asr,wenet_onnx,sensevoice,fireredasr_aed").split(",")
+    if item.strip()
+]
 DEFAULT_ASR_PROVIDER = os.getenv("DEFAULT_ASR_PROVIDER", "mock_asr")
 if DEFAULT_ASR_PROVIDER not in ASR_PROVIDER_CHOICES:
     DEFAULT_ASR_PROVIDER = ASR_PROVIDER_CHOICES[0]
