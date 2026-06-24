@@ -88,6 +88,10 @@ def _infer_tts_provider(model: str, provider: str | None) -> tuple[str | None, s
         return model, None
     if model.startswith("edge"):
         return "edge_tts", model
+    if model.startswith("kokoro"):
+        return "kokoro", model
+    if model.startswith("zipvoice"):
+        return "zipvoice", model
     if model.startswith("mock"):
         return "mock_tts", model
     if model in {"tts-1", "tts-1-hd", "gpt-4o-mini-tts"}:
@@ -242,5 +246,8 @@ async def create_openai_audio_speech(
             "X-Trace-Id": trace_id,
             "X-Provider": result.provider,
             "X-Model": result.model,
+            "X-Audio-Format": result.audio_format,
+            "X-Duration-Ms": str(result.duration_ms),
+            "X-Processing-Ms": str(result.processing_ms),
         },
     )
