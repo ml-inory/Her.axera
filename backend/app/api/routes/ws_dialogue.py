@@ -75,6 +75,8 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                 output_audio_format=request.get("output_audio_format") or "wav",
                 sample_rate=int(request.get("sample_rate") or 24000),
                 system_prompt=request.get("system_prompt"),
+                speaker_enabled=bool(request.get("speaker_enabled", False)),
+                speaker_provider=request.get("speaker_provider"),
             ):
                 event["turn_id"] = turn_id
                 if event.get("type") == "llm":

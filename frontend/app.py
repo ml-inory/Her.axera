@@ -37,6 +37,14 @@ TTS_PROVIDER_CHOICES = ["edge_tts", "mock_tts", "kokoro", "zipvoice"]
 DEFAULT_TTS_PROVIDER = os.getenv("DEFAULT_TTS_PROVIDER", "edge_tts")
 if DEFAULT_TTS_PROVIDER not in TTS_PROVIDER_CHOICES:
     DEFAULT_TTS_PROVIDER = "edge_tts"
+SPEAKER_PROVIDER_CHOICES = [
+    item.strip()
+    for item in os.getenv("SPEAKER_PROVIDER_CHOICES", "mock_speaker,3d_speaker").split(",")
+    if item.strip()
+]
+DEFAULT_SPEAKER_PROVIDER = os.getenv("DEFAULT_SPEAKER_PROVIDER", "mock_speaker")
+if DEFAULT_SPEAKER_PROVIDER not in SPEAKER_PROVIDER_CHOICES:
+    DEFAULT_SPEAKER_PROVIDER = SPEAKER_PROVIDER_CHOICES[0]
 VOICE_CHOICES = [
     "zh-CN-XiaoxiaoNeural",
     "zh-CN-XiaoyiNeural",
@@ -158,6 +166,8 @@ class BackendClient:
         tts_provider: str,
         voice: str,
         input_sample_rate: int,
+        speaker_enabled: bool = False,
+        speaker_provider: str | None = None,
     ) -> list[dict[str, Any]]:
         self.close_stream(turn_id)
         conn = self._open_ws()
@@ -179,6 +189,8 @@ class BackendClient:
                     "output_audio_format": audio_format,
                     "sample_rate": 24000,
                     "channels": 1,
+                    "speaker_enabled": speaker_enabled,
+                    "speaker_provider": speaker_provider,
                 }
             )
         )
@@ -201,7 +213,7 @@ class BackendClient:
     def end_speech_ws(self, turn_id: str) -> dict[str, Any]:
         conn = ACTIVE_STREAMS.get(turn_id)
         if conn is None:
-            return {"events": [], "asr": {}, "llm": {}, "tts_chunks": [], "done": {}, "audio_path": None}
+            return {"events": [], "asr": {}, "speaker": {}, "llm": {}, "tts_chunks": [], "done": {}, "audio_path": None}
         try:
             conn.send(json.dumps({"type": "speech_end", "turn_id": turn_id}))
             events = self._recv_until(conn, {"done"})
@@ -209,6 +221,7 @@ class BackendClient:
             return {
                 "events": events,
                 "asr": next((event for event in events if event.get("type") == "asr"), {}),
+                "speaker": next((event for event in events if event.get("type") == "speaker"), {}),
                 "llm": next((event for event in events if event.get("type") == "llm"), {}),
                 "tts_chunks": tts_chunks,
                 "done": next((event for event in events if event.get("type") == "done"), {}),
@@ -238,6 +251,8 @@ class BackendClient:
         llm_api_key: str,
         tts_provider: str,
         voice: str,
+        speaker_enabled: bool = False,
+        speaker_provider: str | None = None,
     ) -> dict[str, Any]:
         audio_path, should_delete = _materialize_audio(audio)
         try:
@@ -259,6 +274,8 @@ class BackendClient:
                             "voice": voice,
                             "output_audio_format": audio_format,
                             "sample_rate": 24000,
+                            "speaker_enabled": speaker_enabled,
+                            "speaker_provider": speaker_provider,
                         }
                     )
                 )
@@ -279,6 +296,7 @@ class BackendClient:
             return {
                 "events": events,
                 "asr": next((event for event in events if event.get("type") == "asr"), {}),
+                "speaker": next((event for event in events if event.get("type") == "speaker"), {}),
                 "llm": next((event for event in events if event.get("type") == "llm"), {}),
                 "tts_chunks": tts_chunks,
                 "done": next((event for event in events if event.get("type") == "done"), {}),
@@ -406,6 +424,8 @@ def free_speak_stream(
     language: str,
     tts_provider: str,
     voice: str,
+    speaker_enabled: bool,
+    speaker_provider: str,
 ) -> tuple[dict[str, Any], Any, Any, Any]:
     state = state or {}
     history = history or []
@@ -455,6 +475,8 @@ def free_speak_stream(
                     tts_provider=tts_provider,
                     voice=voice,
                     input_sample_rate=int(sample_rate),
+                    speaker_enabled=speaker_enabled,
+                    speaker_provider=speaker_provider if speaker_enabled else None,
                 )
             except Exception as exc:  # noqa: BLE001
                 state = {
@@ -519,16 +541,22 @@ def free_speak_stream(
             history.append({"role": "user", "content": user_text})
         if assistant_text:
             history.append({"role": "assistant", "content": assistant_text})
-        status_text = "\n".join(
-            [
-                f"WebSocket：{API_BASE_URL}/v1/dialogue/ws",
-                f"ASR：{result['asr'].get('provider')} / {result['asr'].get('model')}，耗时 {result['asr'].get('processing_ms')} ms",
-                f"LLM：{result['llm'].get('provider')} / {result['llm'].get('model')}，耗时 {result['llm'].get('processing_ms')} ms",
-                f"TTS：{len(result['tts_chunks'])} 句，累计耗时 {sum(int(item.get('processing_ms') or 0) for item in result['tts_chunks'])} ms",
-                f"流水线总耗时：{result['done'].get('total_processing_ms')} ms",
-            ]
-        )
-        return state, history, result.get("audio_path"), status_text
+        status_lines = [
+            f"WebSocket：{API_BASE_URL}/v1/dialogue/ws",
+            f"ASR：{result['asr'].get('provider')} / {result['asr'].get('model')}，耗时 {result['asr'].get('processing_ms')} ms",
+        ]
+        speaker_info = result.get("speaker") or {}
+        if speaker_info:
+            speaker_name = speaker_info.get("speaker_label") or speaker_info.get("speaker_id", "")
+            status_lines.append(
+                f"说话人：{speaker_name}，置信度 {speaker_info.get('confidence', 0):.2f}，耗时 {speaker_info.get('processing_ms')} ms"
+            )
+        status_lines.extend([
+            f"LLM：{result['llm'].get('provider')} / {result['llm'].get('model')}，耗时 {result['llm'].get('processing_ms')} ms",
+            f"TTS：{len(result['tts_chunks'])} 句，累计耗时 {sum(int(item.get('processing_ms') or 0) for item in result['tts_chunks'])} ms",
+            f"流水线总耗时：{result['done'].get('total_processing_ms')} ms",
+        ])
+        return state, history, result.get("audio_path"), "\n".join(status_lines)
     except Exception as exc:  # noqa: BLE001
         return state, history, gr.update(), f"WebSocket 流水线失败：{exc}"
 
@@ -571,6 +599,12 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
         language = gr.Dropdown(choices=["zh-CN", "en-US"], value="zh-CN", label="语言")
         tts_provider = gr.Dropdown(choices=TTS_PROVIDER_CHOICES, value=DEFAULT_TTS_PROVIDER, label="TTS Provider")
         voice = gr.Dropdown(choices=VOICE_CHOICES, value="zh-CN-XiaoxiaoNeural", label="音色")
+        speaker_enabled = gr.Checkbox(value=False, label="说话人识别")
+        speaker_provider = gr.Dropdown(
+            choices=SPEAKER_PROVIDER_CHOICES,
+            value=DEFAULT_SPEAKER_PROVIDER,
+            label="Speaker Provider",
+        )
         free_speak_enabled = gr.Checkbox(value=False, label="自由说话")
 
     chatbot = gr.Chatbot(label="对话", type="messages", height=460)
@@ -623,6 +657,8 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
             language,
             tts_provider,
             voice,
+            speaker_enabled,
+            speaker_provider,
         ],
         outputs=[free_speak_state, chatbot, audio_output, status],
         stream_every=0.5,

@@ -1,4 +1,6 @@
 from collections.abc import AsyncIterator
+import asyncio
+import logging
 import re
 from time import perf_counter
 from uuid import uuid4
@@ -8,7 +10,10 @@ from app.models.llm import ChatCompletionRequest, ChatMessage
 from app.models.tts import SpeechRequest
 from app.services.asr_service import asr_service
 from app.services.llm_service import llm_service
+from app.services.speaker_service import speaker_service
 from app.services.tts_service import tts_service
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_SYSTEM_PROMPT = "你是一个简洁、友好的语音助手。优先用简短自然的中文回答。"
@@ -38,12 +43,15 @@ class DialogueService:
         output_audio_format: str,
         sample_rate: int,
         system_prompt: str | None,
+        speaker_enabled: bool = False,
+        speaker_provider: str | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         start = perf_counter()
         session_id = session_id or f"ses_{uuid4().hex}"
         selected_language = language or "zh-CN"
 
-        asr_result = await asr_service.transcribe(
+        # Run ASR and speaker identification in parallel when speaker is enabled.
+        asr_coro = asr_service.transcribe(
             trace_id=trace_id,
             audio_content=audio_content,
             filename=filename,
@@ -53,6 +61,33 @@ class DialogueService:
             enable_timestamps=True,
             enable_vad=False,
         )
+
+        speaker_result = None
+        if speaker_enabled:
+            loop = asyncio.get_event_loop()
+            speaker_future = loop.run_in_executor(
+                None,
+                lambda: speaker_service.identify(
+                    trace_id=trace_id,
+                    audio_content=audio_content,
+                    filename=filename,
+                    provider=speaker_provider,
+                    top_k=1,
+                ),
+            )
+            results = await asyncio.gather(asr_coro, speaker_future, return_exceptions=True)
+            asr_result_or_exc, speaker_result_or_exc = results
+            if isinstance(asr_result_or_exc, Exception):
+                raise asr_result_or_exc
+            asr_result = asr_result_or_exc
+            if isinstance(speaker_result_or_exc, Exception):
+                logger.warning("Speaker identification failed (non-fatal): %s", speaker_result_or_exc)
+                speaker_result = None
+            else:
+                speaker_result = speaker_result_or_exc
+        else:
+            asr_result = await asr_coro
+
         yield {
             "type": "asr",
             "trace_id": trace_id,
@@ -62,6 +97,25 @@ class DialogueService:
             "text": asr_result.text,
             "processing_ms": asr_result.processing_ms,
         }
+
+        if speaker_result is not None:
+            yield {
+                "type": "speaker",
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "provider": speaker_result.provider,
+                "model": speaker_result.model,
+                "speaker_id": speaker_result.speaker_id,
+                "speaker_label": speaker_result.matches[0].label if speaker_result.matches else None,
+                "confidence": speaker_result.confidence,
+                "processing_ms": speaker_result.processing_ms,
+            }
+
+        # Enrich system prompt with speaker identity for personalized responses.
+        effective_system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+        if speaker_result is not None and speaker_result.confidence >= 0.5:
+            speaker_name = (speaker_result.matches[0].label if speaker_result.matches else None) or speaker_result.speaker_id
+            effective_system_prompt += f"\n\n当前说话人是{speaker_name}。请根据说话人身份进行个性化回答。"
 
         history = llm_service.sessions.get(session_id, [])
         user_message = ChatMessage(
@@ -73,7 +127,7 @@ class DialogueService:
             trace_id,
             ChatCompletionRequest(
                 messages=[
-                    ChatMessage(role="system", content=system_prompt or DEFAULT_SYSTEM_PROMPT),
+                    ChatMessage(role="system", content=effective_system_prompt),
                     *history[-10:],
                     user_message,
                 ],
