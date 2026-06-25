@@ -1,4 +1,6 @@
+from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import shlex
 import subprocess
@@ -8,7 +10,18 @@ from time import perf_counter
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.models.common import ProviderInfo
-from app.models.speaker import SpeakerIdentifyResponse, SpeakerMatch
+from app.models.speaker import (
+    SpeakerDeleteResponse,
+    SpeakerEnrollResponse,
+    SpeakerIdentifyResponse,
+    SpeakerMatch,
+    SpeakerProfile,
+)
+
+logger = logging.getLogger(__name__)
+
+_SPEAKERS_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_SPEAKERS_FILE = _SPEAKERS_DIR / "speakers.json"
 
 
 class SpeakerService:
@@ -188,6 +201,101 @@ class SpeakerService:
         if self.settings.speaker_model_dir:
             command.extend(["--model-dir", self.settings.speaker_model_dir])
         return command
+
+    def enroll(
+        self,
+        *,
+        trace_id: str,
+        audio_content: bytes,
+        filename: str | None,
+        speaker_id: str,
+        name: str,
+        description: str,
+        provider: str | None,
+    ) -> SpeakerEnrollResponse:
+        start = perf_counter()
+        provider_name = provider or self.settings.default_speaker_provider
+        if not audio_content:
+            raise AppError("speaker_no_audio", "Audio payload is empty", status_code=422, stage="speaker")
+        if not speaker_id.strip():
+            raise AppError("speaker_invalid_id", "speaker_id must not be empty", status_code=422, stage="speaker")
+
+        if provider_name == "3d_speaker":
+            suffix = Path(filename or "audio.wav").suffix or ".wav"
+            input_path = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix="her_speaker_enroll_", suffix=suffix, delete=False) as f:
+                    f.write(audio_content)
+                    input_path = f.name
+                command = self._build_3d_speaker_command(input_path, 1)
+                command.extend(["--mode", "enroll", "--speaker-id", speaker_id])
+                subprocess.run(
+                    command,
+                    cwd=self.settings.speaker_repo_path or None,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.settings.speaker_timeout_sec,
+                    check=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("3d_speaker enrollment subprocess failed: %s", exc)
+            finally:
+                if input_path:
+                    try:
+                        Path(input_path).unlink()
+                    except OSError:
+                        pass
+
+        profile = SpeakerProfile(
+            speaker_id=speaker_id.strip(),
+            name=name.strip() or speaker_id.strip(),
+            description=description.strip(),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            audio_count=1,
+        )
+        self._save_profile(profile)
+        return SpeakerEnrollResponse(
+            trace_id=trace_id,
+            speaker_id=profile.speaker_id,
+            name=profile.name,
+            provider=provider_name,
+            processing_ms=int((perf_counter() - start) * 1000),
+        )
+
+    def list_speakers(self, *, trace_id: str) -> list[SpeakerProfile]:
+        return list(self._load_profiles().values())
+
+    def delete_speaker(self, *, trace_id: str, speaker_id: str) -> SpeakerDeleteResponse:
+        profiles = self._load_profiles()
+        deleted = speaker_id in profiles
+        profiles.pop(speaker_id, None)
+        self._write_profiles(profiles)
+        return SpeakerDeleteResponse(trace_id=trace_id, speaker_id=speaker_id, deleted=deleted)
+
+    def _load_profiles(self) -> dict[str, SpeakerProfile]:
+        if not _SPEAKERS_FILE.exists():
+            return {}
+        try:
+            data = json.loads(_SPEAKERS_FILE.read_text(encoding="utf-8"))
+            return {k: SpeakerProfile(**v) for k, v in data.items()}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _save_profile(self, profile: SpeakerProfile) -> None:
+        profiles = self._load_profiles()
+        if profile.speaker_id in profiles:
+            existing = profiles[profile.speaker_id]
+            profile.audio_count = existing.audio_count + 1
+            profile.created_at = existing.created_at
+        profiles[profile.speaker_id] = profile
+        self._write_profiles(profiles)
+
+    def _write_profiles(self, profiles: dict[str, SpeakerProfile]) -> None:
+        _SPEAKERS_DIR.mkdir(parents=True, exist_ok=True)
+        _SPEAKERS_FILE.write_text(
+            json.dumps({k: v.model_dump() for k, v in profiles.items()}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     def _parse_matches(self, stdout: str) -> list[SpeakerMatch]:
         lines = [line.strip() for line in stdout.splitlines() if line.strip()]

@@ -5,6 +5,9 @@ import re
 from time import perf_counter
 from uuid import uuid4
 
+from base64 import b64decode, b64encode
+
+from app.core.audio_codec import opus_available, pcm_to_opus
 from app.core.config import get_settings
 from app.models.llm import ChatCompletionRequest, ChatMessage
 from app.models.tts import SpeechRequest
@@ -18,10 +21,222 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SYSTEM_PROMPT = "你是一个简洁、友好的语音助手。优先用简短自然的中文回答。"
 
+_SENTENCE_END_RE = re.compile(r"[。！？!?；;\n]")
+_EMOTION_RE = re.compile(r"^\[emotion:(\w+)\]\s*")
+EMOTION_PROMPT_SUFFIX = "\n\n在每次回复开头用 [emotion:XXX] 标签表示你的情绪状态。可选值：happy, sad, surprised, angry, neutral, thinking。标签后直接跟回复正文。"
+
+
+def _parse_emotion(text: str) -> tuple[str | None, str]:
+    """Extract [emotion:XXX] tag from text start. Returns (emotion, cleaned_text)."""
+    match = _EMOTION_RE.match(text)
+    if match:
+        return match.group(1), text[match.end():]
+    return None, text
+
+
+def _extract_complete_sentences(buffer: str, max_chars: int = 80) -> tuple[list[str], str]:
+    """Extract complete sentences from buffer, return (sentences, remaining)."""
+    sentences: list[str] = []
+    last_end = 0
+    for match in _SENTENCE_END_RE.finditer(buffer):
+        end = match.end()
+        part = buffer[last_end:end].strip()
+        if part:
+            while len(part) > max_chars:
+                sentences.append(part[:max_chars].strip())
+                part = part[max_chars:].strip()
+            if part:
+                sentences.append(part)
+        last_end = end
+    remaining = buffer[last_end:]
+    return sentences, remaining
+
 
 class DialogueService:
     def __init__(self) -> None:
         self.settings = get_settings()
+
+    async def _streaming_llm_tts(
+        self,
+        *,
+        trace_id: str,
+        session_id: str,
+        user_message: ChatMessage,
+        effective_system_prompt: str,
+        user_id: str | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+        llm_api_key: str | None,
+        tts_provider: str | None,
+        tts_model: str | None,
+        voice: str | None,
+        selected_language: str,
+        output_audio_format: str,
+        sample_rate: int,
+        output_audio_codec: str = "pcm",
+    ) -> AsyncIterator[dict[str, object]]:
+        """Stream LLM tokens, detect sentence boundaries, synthesize TTS per sentence."""
+        use_opus = output_audio_codec == "opus" and opus_available()
+        history = llm_service.sessions.get(session_id, [])
+        llm_request = ChatCompletionRequest(
+            messages=[
+                ChatMessage(role="system", content=effective_system_prompt),
+                *history[-10:],
+                user_message,
+            ],
+            session_id=None,
+            user_id=user_id,
+            provider=llm_provider,
+            api_key=llm_api_key,
+            model=llm_model,
+            temperature=0.7,
+            top_p=0.9,
+            max_tokens=512,
+        )
+
+        llm_start = perf_counter()
+        full_content = ""
+        buffer = ""
+        sentence_index = 0
+        first_token_yielded = False
+
+        async for token in llm_service.chat_stream(trace_id, llm_request):
+            full_content += token
+            buffer += token
+
+            if not first_token_yielded:
+                first_token_yielded = True
+                yield {
+                    "type": "llm_started",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                }
+
+            # Check for complete sentences in buffer.
+            sentences, buffer = _extract_complete_sentences(buffer)
+            for sentence in sentences:
+                yield {
+                    "type": "llm_delta",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "text": sentence,
+                    "index": sentence_index,
+                }
+                tts_response = await tts_service.synthesize(
+                    trace_id,
+                    SpeechRequest(
+                        text=sentence,
+                        provider=tts_provider,
+                        model=tts_model,
+                        voice=voice,
+                        language=selected_language,
+                        audio_format=output_audio_format,
+                        sample_rate=sample_rate,
+                        return_audio_base64=True,
+                    ),
+                )
+                audio_b64 = tts_response.audio_base64 or ""
+                audio_fmt = tts_response.audio_format
+                if use_opus and audio_b64:
+                    try:
+                        pcm_data = b64decode(audio_b64)
+                        opus_data = pcm_to_opus(pcm_data, sample_rate=tts_response.sample_rate or sample_rate)
+                        audio_b64 = b64encode(opus_data).decode("ascii")
+                        audio_fmt = "opus"
+                    except Exception:  # noqa: BLE001
+                        pass  # fallback to original format
+                yield {
+                    "type": "tts_sentence",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "index": sentence_index,
+                    "text": sentence,
+                    "provider": tts_response.provider,
+                    "model": tts_response.model,
+                    "voice": tts_response.voice,
+                    "audio_format": audio_fmt,
+                    "sample_rate": tts_response.sample_rate,
+                    "duration_ms": tts_response.duration_ms,
+                    "processing_ms": tts_response.processing_ms,
+                    "audio_base64": audio_b64,
+                }
+                sentence_index += 1
+
+        # Process remaining buffer after LLM finishes.
+        remaining = buffer.strip()
+        if remaining:
+            sentences_final = split_sentences(remaining)
+            for sentence in sentences_final:
+                yield {
+                    "type": "llm_delta",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "text": sentence,
+                    "index": sentence_index,
+                }
+                tts_response = await tts_service.synthesize(
+                    trace_id,
+                    SpeechRequest(
+                        text=sentence,
+                        provider=tts_provider,
+                        model=tts_model,
+                        voice=voice,
+                        language=selected_language,
+                        audio_format=output_audio_format,
+                        sample_rate=sample_rate,
+                        return_audio_base64=True,
+                    ),
+                )
+                audio_b64 = tts_response.audio_base64 or ""
+                audio_fmt = tts_response.audio_format
+                if use_opus and audio_b64:
+                    try:
+                        pcm_data = b64decode(audio_b64)
+                        opus_data = pcm_to_opus(pcm_data, sample_rate=tts_response.sample_rate or sample_rate)
+                        audio_b64 = b64encode(opus_data).decode("ascii")
+                        audio_fmt = "opus"
+                    except Exception:  # noqa: BLE001
+                        pass
+                yield {
+                    "type": "tts_sentence",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "index": sentence_index,
+                    "text": sentence,
+                    "provider": tts_response.provider,
+                    "model": tts_response.model,
+                    "voice": tts_response.voice,
+                    "audio_format": audio_fmt,
+                    "sample_rate": tts_response.sample_rate,
+                    "duration_ms": tts_response.duration_ms,
+                    "processing_ms": tts_response.processing_ms,
+                    "audio_base64": audio_b64,
+                }
+                sentence_index += 1
+
+        llm_processing_ms = int((perf_counter() - llm_start) * 1000)
+
+        # Parse emotion tag if present.
+        emotion, cleaned_content = _parse_emotion(full_content)
+
+        # Store session history.
+        assistant_message = ChatMessage(role="assistant", content=cleaned_content or full_content)
+        llm_service.sessions.setdefault(session_id, []).extend([user_message, assistant_message])
+        llm_service._save_sessions()
+
+        llm_event: dict[str, object] = {
+            "type": "llm",
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "provider": llm_provider or self.settings.default_llm_provider,
+            "model": llm_model or "",
+            "text": cleaned_content or full_content,
+            "processing_ms": llm_processing_ms,
+        }
+        if emotion:
+            llm_event["emotion"] = emotion
+        yield llm_event
+
 
     async def stream_audio_pipeline(
         self,
@@ -45,6 +260,7 @@ class DialogueService:
         system_prompt: str | None,
         speaker_enabled: bool = False,
         speaker_provider: str | None = None,
+        output_audio_codec: str = "pcm",
     ) -> AsyncIterator[dict[str, object]]:
         start = perf_counter()
         session_id = session_id or f"ses_{uuid4().hex}"
@@ -111,83 +327,47 @@ class DialogueService:
                 "processing_ms": speaker_result.processing_ms,
             }
 
-        # Enrich system prompt with speaker identity for personalized responses.
+        # Enrich system prompt with speaker identity and emotion detection.
         effective_system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+        if self.settings.enable_emotion_detection:
+            effective_system_prompt += EMOTION_PROMPT_SUFFIX
         if speaker_result is not None and speaker_result.confidence >= 0.5:
             speaker_name = (speaker_result.matches[0].label if speaker_result.matches else None) or speaker_result.speaker_id
             effective_system_prompt += f"\n\n当前说话人是{speaker_name}。请根据说话人身份进行个性化回答。"
 
-        history = llm_service.sessions.get(session_id, [])
         user_message = ChatMessage(
             role="user",
             content=asr_result.text,
             metadata={"source": "asr", "asr_provider": asr_result.provider, "asr_model": asr_result.model},
         )
-        chat_response = llm_service.chat(
-            trace_id,
-            ChatCompletionRequest(
-                messages=[
-                    ChatMessage(role="system", content=effective_system_prompt),
-                    *history[-10:],
-                    user_message,
-                ],
-                session_id=None,
-                user_id=user_id,
-                provider=llm_provider,
-                api_key=llm_api_key,
-                model=llm_model,
-                temperature=0.7,
-                top_p=0.9,
-                max_tokens=512,
-            ),
-        )
-        llm_service.sessions.setdefault(session_id, []).extend([user_message, chat_response.message])
-        yield {
-            "type": "llm",
-            "trace_id": trace_id,
-            "session_id": session_id,
-            "provider": chat_response.provider,
-            "model": chat_response.model,
-            "text": chat_response.message.content,
-            "processing_ms": chat_response.processing_ms,
-        }
 
-        sentences = split_sentences(chat_response.message.content)
-        for index, sentence in enumerate(sentences):
-            tts_response = await tts_service.synthesize(
-                trace_id,
-                SpeechRequest(
-                    text=sentence,
-                    provider=tts_provider,
-                    model=tts_model,
-                    voice=voice,
-                    language=selected_language,
-                    audio_format=output_audio_format,
-                    sample_rate=sample_rate,
-                    return_audio_base64=True,
-                ),
-            )
-            yield {
-                "type": "tts_sentence",
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "index": index,
-                "text": sentence,
-                "provider": tts_response.provider,
-                "model": tts_response.model,
-                "voice": tts_response.voice,
-                "audio_format": tts_response.audio_format,
-                "sample_rate": tts_response.sample_rate,
-                "duration_ms": tts_response.duration_ms,
-                "processing_ms": tts_response.processing_ms,
-                "audio_base64": tts_response.audio_base64 or "",
-            }
+        sentence_count = 0
+        async for event in self._streaming_llm_tts(
+            trace_id=trace_id,
+            session_id=session_id,
+            user_message=user_message,
+            effective_system_prompt=effective_system_prompt,
+            user_id=user_id,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            llm_api_key=llm_api_key,
+            tts_provider=tts_provider,
+            tts_model=tts_model,
+            voice=voice,
+            selected_language=selected_language,
+            output_audio_format=output_audio_format,
+            sample_rate=sample_rate,
+            output_audio_codec=output_audio_codec,
+        ):
+            if event.get("type") == "tts_sentence":
+                sentence_count += 1
+            yield event
 
         yield {
             "type": "done",
             "trace_id": trace_id,
             "session_id": session_id,
-            "sentence_count": len(sentences),
+            "sentence_count": sentence_count,
             "total_processing_ms": int((perf_counter() - start) * 1000),
         }
 
@@ -208,6 +388,8 @@ class DialogueService:
         output_audio_format: str,
         sample_rate: int,
         system_prompt: str | None,
+        output_audio_codec: str = "pcm",
+        image_base64: str | None = None,
     ) -> AsyncIterator[dict[str, object]]:
         start = perf_counter()
         session_id = session_id or f"ses_{uuid4().hex}"
@@ -233,73 +415,42 @@ class DialogueService:
             "text": user_text,
         }
 
-        history = llm_service.sessions.get(session_id, [])
-        user_message = ChatMessage(role="user", content=user_text, metadata={"source": "text"})
-        chat_response = llm_service.chat(
-            trace_id,
-            ChatCompletionRequest(
-                messages=[
-                    ChatMessage(role="system", content=system_prompt or DEFAULT_SYSTEM_PROMPT),
-                    *history[-10:],
-                    user_message,
-                ],
-                session_id=None,
-                user_id=user_id,
-                provider=llm_provider,
-                api_key=llm_api_key,
-                model=llm_model,
-                temperature=0.7,
-                top_p=0.9,
-                max_tokens=512,
-            ),
-        )
-        llm_service.sessions.setdefault(session_id, []).extend([user_message, chat_response.message])
-        yield {
-            "type": "llm",
-            "trace_id": trace_id,
-            "session_id": session_id,
-            "provider": chat_response.provider,
-            "model": chat_response.model,
-            "text": chat_response.message.content,
-            "processing_ms": chat_response.processing_ms,
-        }
+        if image_base64 and self.settings.enable_vision:
+            content: str | list = [
+                {"type": "text", "text": user_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}},
+            ]
+        else:
+            content = user_text
+        user_message = ChatMessage(role="user", content=content, metadata={"source": "text"})
 
-        sentences = split_sentences(chat_response.message.content)
-        for index, sentence in enumerate(sentences):
-            tts_response = await tts_service.synthesize(
-                trace_id,
-                SpeechRequest(
-                    text=sentence,
-                    provider=tts_provider,
-                    model=tts_model,
-                    voice=voice,
-                    language=selected_language,
-                    audio_format=output_audio_format,
-                    sample_rate=sample_rate,
-                    return_audio_base64=True,
-                ),
-            )
-            yield {
-                "type": "tts_sentence",
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "index": index,
-                "text": sentence,
-                "provider": tts_response.provider,
-                "model": tts_response.model,
-                "voice": tts_response.voice,
-                "audio_format": tts_response.audio_format,
-                "sample_rate": tts_response.sample_rate,
-                "duration_ms": tts_response.duration_ms,
-                "processing_ms": tts_response.processing_ms,
-                "audio_base64": tts_response.audio_base64 or "",
-            }
+        sentence_count = 0
+        async for event in self._streaming_llm_tts(
+            trace_id=trace_id,
+            session_id=session_id,
+            user_message=user_message,
+            effective_system_prompt=(system_prompt or DEFAULT_SYSTEM_PROMPT) + (EMOTION_PROMPT_SUFFIX if self.settings.enable_emotion_detection else ""),
+            user_id=user_id,
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            llm_api_key=llm_api_key,
+            tts_provider=tts_provider,
+            tts_model=tts_model,
+            voice=voice,
+            selected_language=selected_language,
+            output_audio_format=output_audio_format,
+            sample_rate=sample_rate,
+            output_audio_codec=output_audio_codec,
+        ):
+            if event.get("type") == "tts_sentence":
+                sentence_count += 1
+            yield event
 
         yield {
             "type": "done",
             "trace_id": trace_id,
             "session_id": session_id,
-            "sentence_count": len(sentences),
+            "sentence_count": sentence_count,
             "total_processing_ms": int((perf_counter() - start) * 1000),
         }
 

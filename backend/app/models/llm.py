@@ -9,11 +9,31 @@ Role = Literal["system", "user", "assistant", "tool"]
 FinishReason = Literal["stop", "length", "tool_calls", "content_filter"]
 
 
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str = ""
+
+
+class ToolCall(BaseModel):
+    id: str = ""
+    type: str = "function"
+    function: ToolCallFunction
+
+
 class ChatMessage(BaseModel):
     role: Role
-    content: str
+    content: str | list[dict[str, Any]] = ""
     content_type: str = "text"
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def text_content(self) -> str:
+        """Return plain text content regardless of format."""
+        if isinstance(self.content, str):
+            return self.content
+        return "".join(item.get("text", "") for item in self.content if item.get("type") == "text")
 
 
 class ChatCompletionRequest(BaseModel):

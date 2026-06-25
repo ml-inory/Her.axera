@@ -22,3 +22,30 @@ class SpeakerIdentifyResponse(BaseModel):
 class SpeakerProvidersResponse(BaseModel):
     trace_id: str
     providers: list[ProviderInfo]
+
+
+class SpeakerProfile(BaseModel):
+    speaker_id: str
+    name: str
+    description: str = ""
+    created_at: str = ""
+    audio_count: int = 0
+
+
+class SpeakerEnrollResponse(BaseModel):
+    trace_id: str
+    speaker_id: str
+    name: str
+    provider: str
+    processing_ms: int
+
+
+class SpeakerListResponse(BaseModel):
+    trace_id: str
+    speakers: list[SpeakerProfile]
+
+
+class SpeakerDeleteResponse(BaseModel):
+    trace_id: str
+    speaker_id: str
+    deleted: bool

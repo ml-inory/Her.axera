@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import asr, health, llm, openai_compat, speakers, tts, ws_dialogue
+from app.api.routes import asr, health, llm, openai_compat, speakers, tts, users, ws_dialogue
 from app.core.config import get_settings
 from app.core.errors import AppError, app_error_handler
 
@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
     app.include_router(llm.router, prefix=settings.api_prefix)
     app.include_router(tts.router, prefix=settings.api_prefix)
     app.include_router(speakers.router, prefix=settings.api_prefix)
+    app.include_router(users.router, prefix=settings.api_prefix)
     app.include_router(ws_dialogue.router, prefix=settings.api_prefix)
     return app
 

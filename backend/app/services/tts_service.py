@@ -521,4 +521,54 @@ class TTSService:
         return cancelled
 
 
+    # ── Voice Clone Management ──────────────────────────────────────
+
+    def _voice_clones_dir(self) -> Path:
+        d = Path(__file__).resolve().parent.parent.parent / "data" / "voice_clones"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _voice_clones_metadata_path(self) -> Path:
+        return self._voice_clones_dir() / "metadata.json"
+
+    def _load_voice_clones(self) -> dict:
+        import json as _json
+        p = self._voice_clones_metadata_path()
+        if not p.exists():
+            return {}
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def _save_voice_clones(self, data: dict) -> None:
+        import json as _json
+        self._voice_clones_metadata_path().write_text(
+            _json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def upload_voice_clone(self, audio_content: bytes, voice_id: str, name: str, description: str = "") -> dict:
+        d = self._voice_clones_dir()
+        audio_path = d / f"{voice_id}.wav"
+        audio_path.write_bytes(audio_content)
+        meta = self._load_voice_clones()
+        meta[voice_id] = {"voice_id": voice_id, "name": name, "description": description, "audio_file": str(audio_path)}
+        self._save_voice_clones(meta)
+        return meta[voice_id]
+
+    def list_voice_clones(self) -> list[dict]:
+        return list(self._load_voice_clones().values())
+
+    def delete_voice_clone(self, voice_id: str) -> bool:
+        meta = self._load_voice_clones()
+        entry = meta.pop(voice_id, None)
+        if entry is None:
+            return False
+        self._save_voice_clones(meta)
+        audio_path = Path(entry.get("audio_file", ""))
+        if audio_path.exists():
+            audio_path.unlink(missing_ok=True)
+        return True
+
+
 tts_service = TTSService()

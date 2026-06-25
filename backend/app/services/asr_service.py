@@ -519,6 +519,38 @@ class FireRedASRAEDProvider:
             ) from exc
 
 
+def _apply_noise_reduction(audio_content: bytes, filename: str | None) -> bytes:
+    """Apply spectral noise reduction to audio. Requires noisereduce."""
+    try:
+        import io
+        import wave
+
+        import numpy as np
+        import noisereduce as nr  # type: ignore[import-untyped]
+
+        buf = io.BytesIO(audio_content)
+        with wave.open(buf, "rb") as wf:
+            sr = wf.getframerate()
+            channels = wf.getnchannels()
+            frames = wf.readframes(wf.getnframes())
+        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        if channels > 1:
+            audio = audio.reshape(-1, channels)[:, 0]
+        reduced = nr.reduce_noise(y=audio, sr=sr)
+        pcm = (np.clip(reduced, -1.0, 1.0) * 32767).astype(np.int16)
+        out = io.BytesIO()
+        with wave.open(out, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(pcm.tobytes())
+        return out.getvalue()
+    except ImportError:
+        return audio_content
+    except Exception:  # noqa: BLE001
+        return audio_content
+
+
 class ASRService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -609,6 +641,10 @@ class ASRService:
         vad_processing_ms = None
         transcribe_audio = audio_content
         transcribe_filename = filename
+
+        if self.settings.enable_noise_reduction:
+            transcribe_audio = _apply_noise_reduction(transcribe_audio, transcribe_filename)
+
         if enable_vad:
             vad_result = vad_service.extract_speech(audio_content, filename)
             transcribe_audio = vad_result.audio_content

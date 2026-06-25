@@ -29,7 +29,7 @@ ASR_PROVIDER_CHOICES = [
 DEFAULT_ASR_PROVIDER = os.getenv("DEFAULT_ASR_PROVIDER", "mock_asr")
 if DEFAULT_ASR_PROVIDER not in ASR_PROVIDER_CHOICES:
     DEFAULT_ASR_PROVIDER = ASR_PROVIDER_CHOICES[0]
-LLM_PROVIDER_CHOICES = ["mock_llm", "deepseek"]
+LLM_PROVIDER_CHOICES = ["mock_llm", "deepseek", "openai_compat"]
 DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "mock_llm")
 if DEFAULT_LLM_PROVIDER not in LLM_PROVIDER_CHOICES:
     DEFAULT_LLM_PROVIDER = "mock_llm"
@@ -136,8 +136,78 @@ class BackendClient:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
 
+    def enroll_speaker(self, audio_path: str, speaker_id: str, name: str, description: str = "") -> dict[str, Any]:
+        with open(audio_path, "rb") as f:
+            response = requests.post(
+                f"{self.base_url}/v1/speakers/enroll",
+                files={"audio": (Path(audio_path).name, f)},
+                data={"speaker_id": speaker_id, "name": name, "description": description},
+                timeout=REQUEST_TIMEOUT,
+            )
+        response.raise_for_status()
+        return response.json()
+
+    def list_speakers(self) -> list[dict[str, Any]]:
+        response = requests.get(f"{self.base_url}/v1/speakers", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json().get("speakers", [])
+
+    def delete_speaker(self, speaker_id: str) -> dict[str, Any]:
+        response = requests.delete(f"{self.base_url}/v1/speakers/{speaker_id}", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+
     def health(self) -> dict[str, Any]:
         response = requests.get(f"{self.base_url}/health", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+
+    # ── Admin / Management ─────────────────────────────────────────
+
+    def get_providers(self, service: str) -> list[dict[str, Any]]:
+        response = requests.get(f"{self.base_url}/v1/{service}/providers", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json().get("providers", [])
+
+    def list_users(self) -> list[dict[str, Any]]:
+        response = requests.get(f"{self.base_url}/v1/users", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json().get("users", [])
+
+    def create_user(self, name: str, role: str = "user") -> dict[str, Any]:
+        response = requests.post(
+            f"{self.base_url}/v1/users",
+            json={"name": name, "role": role},
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        return response.json().get("user", {})
+
+    def delete_user(self, user_id: str) -> dict[str, Any]:
+        response = requests.delete(f"{self.base_url}/v1/users/{user_id}", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json()
+
+    # ── Voice Clone ────────────────────────────────────────────────
+
+    def upload_voice_clone(self, audio_path: str, voice_id: str, name: str) -> dict[str, Any]:
+        with open(audio_path, "rb") as f:
+            response = requests.post(
+                f"{self.base_url}/v1/tts/voices/upload",
+                files={"audio": (Path(audio_path).name, f)},
+                data={"voice_id": voice_id, "name": name},
+                timeout=REQUEST_TIMEOUT,
+            )
+        response.raise_for_status()
+        return response.json()
+
+    def list_voice_clones(self) -> list[dict[str, Any]]:
+        response = requests.get(f"{self.base_url}/v1/tts/voices/clones", timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.json().get("clones", [])
+
+    def delete_voice_clone(self, voice_id: str) -> dict[str, Any]:
+        response = requests.delete(f"{self.base_url}/v1/tts/voices/clones/{voice_id}", timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         return response.json()
 
@@ -460,6 +530,15 @@ def free_speak_stream(
     rms = _chunk_rms(chunk_pcm)
     just_started_speech = False
     if rms >= FREE_SPEAK_RMS_THRESHOLD:
+        # Barge-in: if a previous turn is still active (audio playing), abort it.
+        previous_turn_id = state.get("completed_turn_id")
+        if previous_turn_id and speech_start_sample is None:
+            try:
+                client.close_stream(previous_turn_id)
+            except Exception:  # noqa: BLE001
+                pass
+            state["completed_turn_id"] = None
+
         if speech_start_sample is None:
             speech_start_sample = chunk_start_sample
             active_turn_id = f"turn_{uuid4().hex}"
@@ -518,7 +597,7 @@ def free_speak_stream(
     trailing_silence_ms = int((buffer.shape[0] - last_speech_sample) * 1000 / sample_rate)
     if speech_duration_ms < FREE_SPEAK_MIN_UTTERANCE_MS or trailing_silence_ms < FREE_SPEAK_SILENCE_MS:
         if just_started_speech:
-            return state, gr.update(), None, "检测到新语音，已停止当前播报。"
+            return state, gr.update(), None, "检测到新语音，已打断当前播报。"
         return state, gr.update(), gr.update(), (
             f"自由说话：采集中 {duration_ms} ms，语音 {speech_duration_ms} ms，静音 {trailing_silence_ms} ms"
         )
@@ -531,6 +610,7 @@ def free_speak_stream(
         "speech_start_sample": None,
         "last_speech_sample": None,
         "active_turn_id": None,
+        "completed_turn_id": completed_turn_id,
     }
 
     try:
@@ -561,8 +641,122 @@ def free_speak_stream(
         return state, history, gr.update(), f"WebSocket 流水线失败：{exc}"
 
 
+def enroll_speaker_fn(audio: str | tuple[int, np.ndarray] | None, speaker_id: str, name: str) -> str:
+    if audio is None:
+        return "请上传或录制音频。"
+    if not speaker_id.strip():
+        return "请输入说话人 ID。"
+    audio_path, should_delete = _materialize_audio(audio) if not isinstance(audio, str) else (audio, False)
+    try:
+        result = client.enroll_speaker(audio_path, speaker_id.strip(), name.strip() or speaker_id.strip())
+        return f"注册成功：{result.get('speaker_id')} ({result.get('name')})，耗时 {result.get('processing_ms')} ms"
+    except Exception as exc:  # noqa: BLE001
+        return f"注册失败：{exc}"
+    finally:
+        if should_delete:
+            Path(audio_path).unlink(missing_ok=True)
+
+
+def list_speakers_fn() -> str:
+    try:
+        speakers = client.list_speakers()
+        if not speakers:
+            return "暂无已注册说话人。"
+        lines = [f"- {s.get('speaker_id')}: {s.get('name')} (样本数: {s.get('audio_count', 0)})" for s in speakers]
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"查询失败：{exc}"
+
+
+def delete_speaker_fn(speaker_id: str) -> str:
+    if not speaker_id.strip():
+        return "请输入要删除的说话人 ID。"
+    try:
+        result = client.delete_speaker(speaker_id.strip())
+        return f"删除{'成功' if result.get('deleted') else '失败（未找到）'}：{speaker_id}"
+    except Exception as exc:  # noqa: BLE001
+        return f"删除失败：{exc}"
+
+
 def clear_dialogue() -> tuple[list[dict[str, str]], str, str | None, str]:
     return [], "", None, "已清空对话。"
+
+
+def upload_voice_clone_fn(audio: str | None, voice_id: str, name: str) -> str:
+    if audio is None or not voice_id.strip():
+        return "请上传音频并填写 Voice ID。"
+    try:
+        result = client.upload_voice_clone(audio, voice_id.strip(), name.strip() or voice_id.strip())
+        return f"上传成功：{result.get('voice_id')} ({result.get('name')})"
+    except Exception as exc:  # noqa: BLE001
+        return f"上传失败：{exc}"
+
+
+def list_voice_clones_fn() -> str:
+    try:
+        clones = client.list_voice_clones()
+        if not clones:
+            return "暂无 Voice Clone。"
+        return "\n".join(f"- {c.get('voice_id')}: {c.get('name')}" for c in clones)
+    except Exception as exc:  # noqa: BLE001
+        return f"查询失败：{exc}"
+
+
+def delete_voice_clone_fn(voice_id: str) -> str:
+    if not voice_id.strip():
+        return "请输入要删除的 Voice ID。"
+    try:
+        result = client.delete_voice_clone(voice_id.strip())
+        return f"删除{'成功' if result.get('deleted') else '失败'}：{voice_id}"
+    except Exception as exc:  # noqa: BLE001
+        return f"删除失败：{exc}"
+
+
+def admin_system_status() -> str:
+    try:
+        lines = []
+        health = client.health()
+        lines.append(f"Health: {health}")
+        for svc in ["asr", "llm", "tts", "speakers"]:
+            try:
+                providers = client.get_providers(svc)
+                names = [p.get("name", "?") for p in providers]
+                lines.append(f"{svc.upper()} providers: {', '.join(names)}")
+            except Exception:  # noqa: BLE001
+                lines.append(f"{svc.upper()} providers: N/A")
+        return "\n".join(lines)
+    except Exception as exc:  # noqa: BLE001
+        return f"查询失败：{exc}"
+
+
+def admin_list_users() -> str:
+    try:
+        users = client.list_users()
+        if not users:
+            return "暂无用户。"
+        return "\n".join(f"- {u.get('user_id')}: {u.get('name')} ({u.get('role')})" for u in users)
+    except Exception as exc:  # noqa: BLE001
+        return f"查询失败：{exc}"
+
+
+def admin_create_user(name: str, role: str) -> str:
+    if not name.strip():
+        return "请输入用户名。"
+    try:
+        user = client.create_user(name.strip(), role)
+        return f"创建成功：{user.get('user_id')} API Key: {user.get('api_key')}"
+    except Exception as exc:  # noqa: BLE001
+        return f"创建失败：{exc}"
+
+
+def admin_delete_user(user_id: str) -> str:
+    if not user_id.strip():
+        return "请输入用户 ID。"
+    try:
+        result = client.delete_user(user_id.strip())
+        return f"删除{'成功' if result.get('deleted') else '失败'}：{user_id}"
+    except Exception as exc:  # noqa: BLE001
+        return f"删除失败：{exc}"
 
 
 def check_backend() -> str:
@@ -628,6 +822,18 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
     status = gr.Textbox(label="状态", value="等待输入。", lines=5)
     free_speak_state = gr.State({})
 
+    with gr.Accordion("说话人管理", open=False):
+        with gr.Row():
+            enroll_audio = gr.Audio(label="注册音频", sources=["microphone", "upload"], type="filepath")
+            enroll_speaker_id = gr.Textbox(label="说话人 ID", placeholder="spk_001")
+            enroll_name = gr.Textbox(label="名称", placeholder="张三")
+        with gr.Row():
+            enroll_btn = gr.Button("注册说话人", variant="primary")
+            list_btn = gr.Button("刷新列表")
+            delete_id = gr.Textbox(label="删除 ID", placeholder="spk_001", scale=1)
+            delete_btn = gr.Button("删除", variant="stop")
+        speaker_status = gr.Textbox(label="说话人管理状态", lines=4)
+
     send_button.click(
         send_text,
         inputs=[text_input, chatbot, session_id, llm_provider, llm_api_key, language, tts_provider, voice],
@@ -666,6 +872,43 @@ with gr.Blocks(title="Her 语音对话 Demo") as demo:
     )
     clear_button.click(clear_dialogue, outputs=[chatbot, text_input, audio_output, status])
     health_button.click(check_backend, outputs=status)
+    enroll_btn.click(enroll_speaker_fn, inputs=[enroll_audio, enroll_speaker_id, enroll_name], outputs=speaker_status)
+    list_btn.click(list_speakers_fn, outputs=speaker_status)
+    delete_btn.click(delete_speaker_fn, inputs=delete_id, outputs=speaker_status)
+
+    with gr.Accordion("Voice Clone 管理", open=False):
+        with gr.Row():
+            vc_audio = gr.Audio(label="参考音频", sources=["microphone", "upload"], type="filepath")
+            vc_voice_id = gr.Textbox(label="Voice ID", placeholder="voice_001")
+            vc_name = gr.Textbox(label="名称", placeholder="我的声音")
+        with gr.Row():
+            vc_upload_btn = gr.Button("上传", variant="primary")
+            vc_list_btn = gr.Button("刷新列表")
+            vc_del_id = gr.Textbox(label="删除 ID", placeholder="voice_001", scale=1)
+            vc_del_btn = gr.Button("删除", variant="stop")
+        vc_status = gr.Textbox(label="Voice Clone 状态", lines=3)
+
+    vc_upload_btn.click(upload_voice_clone_fn, inputs=[vc_audio, vc_voice_id, vc_name], outputs=vc_status)
+    vc_list_btn.click(list_voice_clones_fn, outputs=vc_status)
+    vc_del_btn.click(delete_voice_clone_fn, inputs=vc_del_id, outputs=vc_status)
+
+    with gr.Accordion("管理后台", open=False):
+        with gr.Row():
+            admin_status_btn = gr.Button("系统状态")
+            admin_users_btn = gr.Button("用户列表")
+        admin_output = gr.Textbox(label="管理输出", lines=6)
+        with gr.Row():
+            admin_new_name = gr.Textbox(label="新用户名", placeholder="张三")
+            admin_new_role = gr.Dropdown(choices=["user", "admin"], value="user", label="角色")
+            admin_create_btn = gr.Button("创建用户", variant="primary")
+        with gr.Row():
+            admin_del_id = gr.Textbox(label="删除用户 ID", placeholder="usr_xxx")
+            admin_del_btn = gr.Button("删除用户", variant="stop")
+
+    admin_status_btn.click(admin_system_status, outputs=admin_output)
+    admin_users_btn.click(admin_list_users, outputs=admin_output)
+    admin_create_btn.click(admin_create_user, inputs=[admin_new_name, admin_new_role], outputs=admin_output)
+    admin_del_btn.click(admin_delete_user, inputs=admin_del_id, outputs=admin_output)
 
 
 if __name__ == "__main__":
