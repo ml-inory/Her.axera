@@ -28,6 +28,14 @@ class SpeakerService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.providers = {
+            "mock_speaker": ProviderInfo(
+                name="mock_speaker",
+                type="mock",
+                models=["mock-speaker"],
+                languages=[],
+                audio_formats=["wav", "pcm", "mp3", "flac"],
+                features=["speaker_identification", "deterministic"],
+            ),
             "3d_speaker": ProviderInfo(
                 name="3d_speaker",
                 type="local",
@@ -70,6 +78,16 @@ class SpeakerService:
         if not audio_content:
             raise AppError("speaker_no_audio", "Audio payload is empty", status_code=422, stage="speaker")
 
+        if provider_name == "mock_speaker":
+            return SpeakerIdentifyResponse(
+                trace_id=trace_id,
+                provider="mock_speaker",
+                model=provider_info.models[0],
+                speaker_id="spk_0",
+                confidence=0.99,
+                matches=[SpeakerMatch(speaker_id="spk_0", score=0.99, label="Mock Speaker")],
+                processing_ms=int((perf_counter() - start) * 1000),
+            )
         if provider_name != "3d_speaker":
             raise AppError("provider_not_found", f"Speaker provider {provider_name} is not configured", status_code=404, stage="speaker")
         return self._identify_3d_speaker(trace_id, audio_content, filename, top_k, start)

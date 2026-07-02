@@ -555,6 +555,14 @@ class ASRService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.providers = {}
+        self.providers["mock_asr"] = ProviderInfo(
+            name="mock_asr",
+            type="mock",
+            models=["mock-asr"],
+            languages=["zh-CN", "en-US"],
+            audio_formats=["wav", "pcm", "mp3", "flac", "webm"],
+            features=["offline_test", "deterministic"],
+        )
         self.wenet_provider = WenetONNXProvider()
         if self._should_register_wenet():
             self.providers[self.wenet_provider.name] = self.wenet_provider.info()

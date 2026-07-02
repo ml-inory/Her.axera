@@ -6,8 +6,8 @@
 
 ```text
 ┌──────────┐    WebSocket / REST     ┌─────────────────────────────┐
-│  Gradio  │ ◄─────────────────────► │       FastAPI Backend       │
-│ Frontend │                         │                             │
+│ Web UI   │ ◄─────────────────────► │       FastAPI Backend       │
+│ /ui/     │                         │                             │
 └──────────┘                         │  ┌─────┐  ┌─────┐  ┌─────┐ │
                                      │  │ ASR │→ │ LLM │→ │ TTS │ │
                                      │  └─────┘  └─────┘  └─────┘ │
@@ -30,10 +30,56 @@
 | TTS  | mock_tts, edge_tts, kokoro, zipvoice |
 | Speaker | mock_speaker, 3d_speaker |
 
-- **Gradio 前端**：文字输入、麦克风录音、Free Speak 自由对话模式
+- **Web 控制台**：文字输入、麦克风流式录音、链路耗时指标、TTS 自动播放
 - **Silero VAD**：语音活动检测，自动切分有效语音段
 
-## 快速开始
+## 推荐部署：AX650 后端 + PC 前端
+
+第一版功能体验复刻以“后端在 AX650、前端在 PC 浏览器”为主路径。AX650 负责 ASR/TTS/Speaker 等端侧能力，PC 只运行静态 Web 控制台。
+
+### 1. 在 AX650 上准备后端
+
+```bash
+cd /mnt/her-axera   # 或你的 Her.axera 仓库路径
+scripts/ax650_setup_backend.sh
+```
+
+按需下载模型，默认走 `https://hf-mirror.com`：
+
+```bash
+scripts/ax650_setup_backend.sh --models "sensevoice kokoro speaker"
+```
+
+脚本不会覆盖已有 `backend/.env`。模型下载后会生成 `backend/.env.models`，请确认后再把需要的配置合并进 `backend/.env`。
+
+### 2. 在 AX650 上启动后端
+
+```bash
+scripts/ax650_run_backend.sh --host 0.0.0.0 --port 8080
+```
+
+健康检查：
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+### 3. 在 PC 上启动前端
+
+```bash
+cd /path/to/Her.axera
+scripts/pc_run_frontend.sh --backend-url http://<AX650_IP>:8080
+```
+
+浏览器打开脚本输出的 URL。前端也支持手工访问：
+
+```text
+http://127.0.0.1:7860/?api=http%3A%2F%2F<AX650_IP>%3A8080
+```
+
+详细板端部署流程见 [AX 板运行文档](docs/ax_board_nfs_run.md)。
+
+## 本地开发快速开始
 
 ### 1. 启动后端
 
@@ -45,16 +91,19 @@ cp .env.example .env   # 编辑 .env 配置 Provider
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
-### 2. 启动前端
+### 2. 打开前端
 
 ```bash
-cd frontend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-API_BASE_URL=http://127.0.0.1:8080 python app.py
+open http://127.0.0.1:8080/ui/
 ```
 
-访问 http://127.0.0.1:7860 即可使用。
+访问 http://127.0.0.1:8080/ui/ 即可使用。前端也可用 `python3 -m http.server 7860 --directory frontend/static` 独立启动。
+
+本地 Docker 主要用于开发机验证：
+
+```bash
+docker-compose up -d
+```
 
 ### 3. 快速测试
 
@@ -88,6 +137,7 @@ curl -X POST http://localhost:8080/v1/audio/speech \
 | [WeNet ONNX 部署](docs/wenet_onnx_asr_deploy.md) | WeNet ASR 部署指南 |
 | [SenseVoice ASR](docs/sensevoice_asr_provider.md) | SenseVoice ASR 接入指南 |
 | [FireRedASR-AED](docs/fireredasr_aed_asr_provider.md) | FireRedASR-AED 接入指南 |
+| [AX 板 NFS 运行](docs/ax_board_nfs_run.md) | 通过 NFS mount 在 AX 板上验证 |
 
 ## 支持平台
 

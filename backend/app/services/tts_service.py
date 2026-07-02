@@ -37,10 +37,35 @@ def _pitch(value: float) -> str:
     return f"{hz:+d}Hz"
 
 
+def _mock_wav(text: str, sample_rate: int) -> tuple[bytes, int]:
+    duration_ms = max(350, min(2200, len(text) * 90))
+    frame_count = int(sample_rate * duration_ms / 1000)
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        frames = bytearray()
+        for index in range(frame_count):
+            envelope = min(1.0, index / max(1, sample_rate * 0.03), (frame_count - index) / max(1, sample_rate * 0.05))
+            value = int(math.sin(2 * math.pi * 440 * index / sample_rate) * 8000 * envelope)
+            frames.extend(value.to_bytes(2, "little", signed=True))
+        wav_file.writeframes(bytes(frames))
+    return buffer.getvalue(), duration_ms
+
+
 class TTSService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.providers = {
+            "mock_tts": ProviderInfo(
+                name="mock_tts",
+                type="mock",
+                models=["mock-tts"],
+                languages=["zh-CN", "en-US"],
+                audio_formats=["wav"],
+                features=["deterministic", "base64_audio"],
+            ),
             "edge_tts": ProviderInfo(
                 name="edge_tts",
                 type="remote",
@@ -175,12 +200,38 @@ class TTSService:
 
         selected_model = request.model or provider_info.models[0]
         selected_voice = request.voice or "female_default"
+        if provider_name == "mock_tts":
+            return self._synthesize_mock_tts(trace_id, request, selected_model, selected_voice, start)
         if provider_name == "edge_tts":
             return await self._synthesize_edge_tts(trace_id, request, selected_model, selected_voice, start)
         if provider_name in {"kokoro", "zipvoice"}:
             return self._synthesize_axera_tts(trace_id, request, provider_name, selected_model, selected_voice, start)
 
         raise AppError("provider_not_found", f"TTS provider {provider_name} is not configured", status_code=404, stage="tts")
+
+    def _synthesize_mock_tts(
+        self,
+        trace_id: str,
+        request: SpeechRequest,
+        selected_model: str,
+        selected_voice: str,
+        start: float,
+    ) -> SpeechResponse:
+        audio_content, duration_ms = _mock_wav(request.text, request.sample_rate)
+        return SpeechResponse(
+            trace_id=trace_id,
+            provider="mock_tts",
+            model=selected_model,
+            voice=selected_voice,
+            language=request.language,
+            audio_url=None,
+            audio_base64=b64encode(audio_content).decode("ascii") if request.return_audio_base64 else None,
+            audio_format="wav",
+            sample_rate=request.sample_rate,
+            duration_ms=duration_ms,
+            processing_ms=int((perf_counter() - start) * 1000),
+            cache_hit=False,
+        )
 
     def _should_enable_kokoro(self) -> bool:
         return bool(self.settings.enable_kokoro_tts or self.settings.kokoro_repo_path or self.settings.kokoro_command)

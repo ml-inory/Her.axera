@@ -1,4 +1,1 @@
-# Browser microphone recordings require ffmpeg/ffprobe on PATH for Gradio audio decoding.
-gradio>=4.44.0,<6.0.0
-requests>=2.32.0,<3.0.0
-websocket-client>=1.8.0,<2.0.0
+# The primary frontend is a static SPA under frontend/static and has no Python runtime dependencies.
