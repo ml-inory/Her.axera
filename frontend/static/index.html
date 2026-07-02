@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Her.axera Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="stage" aria-label="Voice dialogue">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">AX650 Voice Dialogue</p>
+            <h1>Her.axera</h1>
+          </div>
+          <div class="connection">
+            <span id="statusDot" class="dot"></span>
+            <span id="connectionText">未连接</span>
+          </div>
+        </header>
+
+        <section class="conversation" id="conversation" aria-live="polite"></section>
+
+        <section class="composer" aria-label="Input">
+          <canvas id="waveform" width="960" height="96" aria-hidden="true"></canvas>
+          <div class="inputRow">
+            <button id="recordButton" class="recordButton" type="button" aria-label="Start recording">
+              <span class="recordIcon"></span>
+            </button>
+            <input id="textInput" type="text" autocomplete="off" placeholder="输入文字或点击麦克风开始说话" />
+            <button id="sendButton" type="button">发送</button>
+          </div>
+          <div class="hintRow">
+            <span id="turnStatus">待机</span>
+            <button id="stopAudioButton" class="ghostButton" type="button">停止播报</button>
+          </div>
+        </section>
+      </section>
+
+      <aside class="panel" aria-label="Controls">
+        <section class="group">
+          <h2>链路</h2>
+          <label>
+            API
+            <input id="apiBase" type="text" />
+          </label>
+          <label>
+            Session
+            <input id="sessionId" type="text" />
+          </label>
+          <div class="twoCol">
+            <label>
+              ASR
+              <select id="asrProvider"></select>
+            </label>
+            <label>
+              LLM
+              <select id="llmProvider"></select>
+            </label>
+          </div>
+          <div class="twoCol">
+            <label>
+              TTS
+              <select id="ttsProvider"></select>
+            </label>
+            <label>
+              Voice
+              <select id="voice"></select>
+            </label>
+          </div>
+          <label>
+            LLM API Key
+            <input id="llmApiKey" type="password" autocomplete="off" />
+          </label>
+        </section>
+
+        <section class="group">
+          <h2>指标</h2>
+          <dl class="metrics">
+            <div><dt>ASR</dt><dd id="asrMetric">-</dd></div>
+            <div><dt>LLM</dt><dd id="llmMetric">-</dd></div>
+            <div><dt>TTS</dt><dd id="ttsMetric">-</dd></div>
+            <div><dt>Total</dt><dd id="totalMetric">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="group">
+          <h2>事件</h2>
+          <ol id="eventLog" class="eventLog"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <template id="messageTemplate">
+      <article class="message">
+        <div class="avatar"></div>
+        <div>
+          <div class="messageMeta"></div>
+          <p class="messageText"></p>
+        </div>
+      </article>
+    </template>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>

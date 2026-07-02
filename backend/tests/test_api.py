@@ -30,6 +30,24 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_static_frontend_is_served() -> None:
+    response = client.get("/ui/")
+    assert response.status_code == 200
+    assert "Her.axera Console" in response.text
+
+
+def test_cors_preflight_for_static_frontend() -> None:
+    response = client.options(
+        "/v1/tts/providers",
+        headers={
+            "Origin": "http://127.0.0.1:7860",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
 def test_openai_compatible_cascade_endpoints() -> None:
     audio = _wav_bytes()
     asr_response = client.post(

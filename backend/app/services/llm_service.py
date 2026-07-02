@@ -46,10 +46,9 @@ class LLMService:
             "mock_llm": ProviderInfo(
                 name="mock_llm",
                 type="mock",
-                models=["mock-chat-general"],
+                models=["mock-llm"],
                 languages=["zh-CN", "en-US"],
-                features=["chat", "json_output", "tool_calls"],
-                metadata={"max_context_tokens": 32768},
+                features=["chat", "streaming", "deterministic"],
             ),
             "deepseek": ProviderInfo(
                 name="deepseek",
@@ -162,29 +161,43 @@ class LLMService:
         if not request.messages:
             raise AppError("invalid_request", "messages must not be empty", status_code=400, stage="llm")
 
+        if provider_name == "mock_llm":
+            return self._chat_mock(trace_id, request, provider_info.models[0], start)
         selected_model = request.model or provider_info.models[0]
-        if provider_name in ("deepseek", "openai_compat"):
-            return self._chat_openai_api(trace_id, request, provider_name, selected_model, start)
-        return self._chat_mock(trace_id, request, provider_name, selected_model, start)
+        if provider_name not in ("deepseek", "openai_compat"):
+            raise AppError("provider_not_found", f"LLM provider {provider_name} is not configured", status_code=404, stage="llm")
+        return self._chat_openai_api(trace_id, request, provider_name, selected_model, start)
 
-    def _chat_mock(self, trace_id: str, request: ChatCompletionRequest, provider_name: str, selected_model: str, start: float) -> ChatCompletionResponse:
-        latest_user_text = next((msg.text_content for msg in reversed(request.messages) if msg.role == "user"), "")
-        content = f"收到：{latest_user_text}"
-        if request.response_format and request.response_format.get("type") == "json_schema":
-            content = '{"message":"收到请求","mock":true}'
-        message = ChatMessage(role="assistant", content=content, content_type="json" if content.startswith("{") else "text")
+    def _chat_mock(
+        self,
+        trace_id: str,
+        request: ChatCompletionRequest,
+        selected_model: str,
+        start: float,
+    ) -> ChatCompletionResponse:
+        user_text = next((message.text_content for message in reversed(request.messages) if message.role == "user"), "")
+        content = f"收到：{user_text}。我会用简短自然的方式回应。"
+        message = ChatMessage(role="assistant", content=content)
         session_id = request.session_id
         if session_id:
             self.sessions.setdefault(session_id, []).extend(request.messages)
             self.sessions[session_id].append(message)
             self._maybe_trim(session_id)
             self._save_sessions()
-        prompt_tokens = sum(max(1, len(msg.text_content) // 2) for msg in request.messages)
-        completion_tokens = max(1, len(message.content) // 2)
+        prompt_tokens = sum(len(message.text_content) for message in request.messages)
+        completion_tokens = len(content)
         return ChatCompletionResponse(
-            trace_id=trace_id, session_id=session_id, provider=provider_name, model=selected_model,
-            message=message, finish_reason="stop",
-            usage=TokenUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens),
+            trace_id=trace_id,
+            session_id=session_id,
+            provider="mock_llm",
+            model=selected_model,
+            message=message,
+            finish_reason="stop",
+            usage=TokenUsage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            ),
             safety=SafetyResult(blocked=False, categories=[]),
             processing_ms=int((perf_counter() - start) * 1000),
         )
@@ -240,19 +253,15 @@ class LLMService:
             raise AppError("provider_not_found", f"LLM provider {provider_name} is not configured", status_code=404, stage="llm")
         if not request.messages:
             raise AppError("invalid_request", "messages must not be empty", status_code=400, stage="llm")
-        if provider_name in ("deepseek", "openai_compat"):
-            async for token in self._stream_openai_api(request, provider_name):
-                yield token
-        else:
-            async for token in self._stream_mock(request):
-                yield token
-
-    async def _stream_mock(self, request: ChatCompletionRequest) -> AsyncIterator[str]:
-        latest_user_text = next((msg.text_content for msg in reversed(request.messages) if msg.role == "user"), "")
-        content = f"收到：{latest_user_text}"
-        for char in content:
-            yield char
-            await asyncio.sleep(0.03)
+        if provider_name == "mock_llm":
+            response = self._chat_mock(trace_id, request, provider_info.models[0], perf_counter())
+            for token in response.message.content.split("，"):
+                yield token if token.endswith("。") else f"{token}，"
+            return
+        if provider_name not in ("deepseek", "openai_compat"):
+            raise AppError("provider_not_found", f"LLM provider {provider_name} is not configured", status_code=404, stage="llm")
+        async for token in self._stream_openai_api(request, provider_name):
+            yield token
 
     async def _stream_openai_api(self, request: ChatCompletionRequest, provider_name: str) -> AsyncIterator[str]:
         api_base, api_key, model = self._resolve_api(provider_name, request)
