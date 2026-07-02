@@ -120,5 +120,11 @@
     "Model download uses huggingface_hub and defaults to https://hf-mirror.com.",
     "Frontend can be served by Python's built-in http.server on the PC.",
     "Real AXEngine provider validation will remain provider-specific and outside this first iteration unless scripts can call existing checks safely."
-  ]
+  ],
+  "pull_request": {
+    "url": "https://github.com/ml-inory/Her.axera/pull/3",
+    "base": "main",
+    "branch": "feat/ax650-pc-deploy-20260702",
+    "created": true
+  }
 }
