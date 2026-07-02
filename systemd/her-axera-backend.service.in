@@ -1,0 +1,16 @@
+[Unit]
+Description=Her.axera AX650 backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO_ROOT@/backend
+EnvironmentFile=@REPO_ROOT@/backend/.env
+EnvironmentFile=-@REPO_ROOT@/backend/.env.models
+ExecStart=@REPO_ROOT@/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port @PORT@
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -3,7 +3,7 @@
   "stack": "Python FastAPI backend, static HTML/CSS/JavaScript frontend, shell deployment scripts",
   "base_branch": "main",
   "branch": "feat/ax650-pc-deploy-20260702",
-  "iteration": 1,
+  "iteration": 2,
   "validation_command": "cd backend && python3 -m pytest tests",
   "requirement_alignment": {
     "goal": "Recreate the xiaozhi-like functional experience, not protocol compatibility, with AX650 running the backend and PC browser running the frontend.",
@@ -40,6 +40,18 @@
         "Documentation presents this as the primary deployment path and explains model download/provider enabling boundaries.",
         "cd backend && python3 -m pytest tests passes."
       ]
+    },
+    {
+      "number": 4,
+      "url": "https://github.com/ml-inory/Her.axera/issues/4",
+      "title": "feat[2]: add AX650 backend systemd service install flow",
+      "acceptance_checks": [
+        "Provide a systemd service template for the AX650 backend.",
+        "Provide a non-destructive install script that renders the service for the current repo path and can optionally enable/start it.",
+        "Provide simple status/log commands in script output or documentation.",
+        "Document how this fits after scripts/ax650_setup_backend.sh.",
+        "cd backend && python3 -m pytest tests passes."
+      ]
     }
   ],
   "rounds": [
@@ -51,42 +63,31 @@
       "test_command": "cd backend && python3 -m pytest tests",
       "test_summary": "14 tests passed in 0.96s.",
       "summary": "Added AX650 backend setup/run scripts, PC static frontend launch flow, model download helper, static web console, and deployment documentation."
+    },
+    {
+      "iteration": 2,
+      "issue_number": 4,
+      "commit_hash": "pending",
+      "test_status": "pass",
+      "test_command": "cd backend && python3 -m pytest tests",
+      "test_summary": "15 tests passed in 0.97s.",
+      "summary": "Added a systemd service template and installer for AX650 backend autostart, plus documentation and tests."
     }
   ],
   "current_iteration": {
-    "issue_number": 2,
+    "issue_number": 4,
     "changed_files": [
       ".build-state.json",
       "README.md",
-      "backend/.env.example",
-      "backend/Dockerfile",
-      "backend/app/main.py",
-      "backend/app/services/asr_service.py",
-      "backend/app/services/llm_service.py",
-      "backend/app/services/speaker_service.py",
-      "backend/app/services/tts_service.py",
       "docs/ax_board_nfs_run.md",
-      "docker-compose.yml",
-      "frontend/Dockerfile",
-      "frontend/README.md",
-      "frontend/app.py",
-      "frontend/requirements.txt",
-      "frontend/static/app.js",
-      "frontend/static/index.html",
-      "frontend/static/styles.css",
-      "backend/requirements-model-download.txt",
-      "backend/tests/test_api.py",
-      "backend/tools/download_ax_models.py",
-      "backend/tests/test_download_ax_models.py",
       "backend/tests/test_deploy_scripts.py",
-      "scripts/ax650_setup_backend.sh",
-      "scripts/ax650_run_backend.sh",
-      "scripts/pc_run_frontend.sh"
+      "scripts/ax650_install_service.sh",
+      "systemd/her-axera-backend.service.in"
     ],
-    "implementation_summary": "Added AX650 setup/run scripts, PC frontend launch script, URL-based frontend backend configuration, model download requirements, and deployment documentation.",
+    "implementation_summary": "Added a systemd service template and installer for AX650 backend autostart, plus documentation and tests.",
     "test_status": "pass",
     "test_command": "cd backend && python3 -m pytest tests",
-    "test_summary": "14 tests passed in 0.96s."
+    "test_summary": "15 tests passed in 0.97s."
   },
   "pre_existing_changes": [
     "README.md",
