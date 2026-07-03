@@ -44,6 +44,8 @@ cd /mnt/her-axera   # 或你的 Her.axera 仓库路径
 scripts/ax650_setup_backend.sh
 ```
 
+基础依赖包含 `silero-vad-axera`。脚本会优先把板端已有的 `axengine` 链接进隔离 venv，避免把系统 torch 带入默认环境；默认 `backend/.env` 会加入 `/soc/lib`，让 AX650 上的 `AxEngineExecutionProvider` 能找到 `libax_engine.so`。
+
 按需下载模型，默认走 `https://hf-mirror.com`：
 
 ```bash
