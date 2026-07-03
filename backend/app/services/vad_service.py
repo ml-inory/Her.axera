@@ -159,11 +159,11 @@ class SileroVADService:
 
     def _load_silero(self) -> dict[str, Any]:
         try:
-            from silero_vad import collect_chunks, get_speech_timestamps, load_silero_vad, read_audio, save_audio
+            from silero_vad_axera import collect_chunks, get_speech_timestamps, load_silero_vad, read_audio, save_audio
         except ModuleNotFoundError as exc:
             raise AppError(
                 "vad_dependency_missing",
-                "silero-vad is not installed; install backend requirements with silero-vad enabled",
+                "silero-vad-axera is not installed; install backend requirements",
                 status_code=503,
                 stage="vad",
                 retryable=True,
