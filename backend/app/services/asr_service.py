@@ -519,6 +519,108 @@ class FireRedASRAEDProvider:
             ) from exc
 
 
+
+class AXASRProvider:
+    """ASR provider backed by ax_asr wheel package (ax_asr_api)."""
+    name = "ax_asr"
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self._asr = None
+
+    def info(self) -> ProviderInfo:
+        return ProviderInfo(
+            name=self.name,
+            type="local",
+            models=["ax_asr_sensevoice", "ax_asr_whisper_tiny", "ax_asr_whisper_base",
+                    "ax_asr_whisper_small", "ax_asr_whisper_turbo"],
+            languages=["zh", "en", "yue", "ja", "ko", "auto"],
+            audio_formats=["wav", "mp3"],
+            features=["axengine", "local_model", "ax_asr_api"],
+            metadata={
+                "source_repo": "https://github.com/AXERA-TECH/ax_asr_api",
+                "wheel_version": "0.1.0",
+                "model_type": self.settings.ax_asr_model_type,
+                "model_path": self.settings.ax_asr_model_path,
+            },
+        )
+
+    def transcribe(self, audio_content: bytes, filename: str | None, language: str | None) -> tuple[str, dict[str, str | int | bool | None]]:
+        if not audio_content:
+            raise AppError("asr_no_speech", "Audio payload is empty", status_code=422, stage="asr")
+
+        suffix = Path(filename or "audio.wav").suffix or ".wav"
+        with tempfile.NamedTemporaryFile(prefix="her_axasr_", suffix=suffix, delete=False) as audio_file:
+            audio_file.write(audio_content)
+            audio_path = audio_file.name
+
+        selected_language = language or self.settings.ax_asr_language
+
+        try:
+            text = self.asr.transcribe_file(audio_path, language=selected_language)
+        except AppError:
+            raise
+        except Exception as exc:
+            raise AppError(
+                "ax_asr_transcription_failed",
+                f"AX ASR transcription failed: {exc}",
+                status_code=502,
+                stage="asr",
+                retryable=True,
+            ) from exc
+        finally:
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+
+        return text, {
+            "language": selected_language,
+            "model_type": self.settings.ax_asr_model_type,
+            "model_path": self.settings.ax_asr_model_path,
+        }
+
+    @property
+    def asr(self):
+        if self._asr is None:
+            self._asr = self._build_asr()
+        return self._asr
+
+    def _build_asr(self):
+        try:
+            from ax_asr import AX_ASR
+        except ImportError as exc:
+            raise AppError(
+                "ax_asr_not_installed",
+                "ax_asr wheel is not installed. Install from: "
+                "https://github.com/AXERA-TECH/ax_asr_api/releases",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            ) from exc
+
+        model_path = self.settings.ax_asr_model_path
+        if not model_path:
+            raise AppError(
+                "ax_asr_not_configured",
+                "AX_ASR_MODEL_PATH is required for ASR provider ax_asr",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            )
+
+        try:
+            return AX_ASR(self.settings.ax_asr_model_type, model_path)
+        except Exception as exc:
+            raise AppError(
+                "ax_asr_init_failed",
+                f"Failed to initialize AX_ASR: {exc}",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            ) from exc
+
+
 def _apply_noise_reduction(audio_content: bytes, filename: str | None) -> bytes:
     """Apply spectral noise reduction to audio. Requires noisereduce."""
     try:
@@ -572,6 +674,9 @@ class ASRService:
         self.fireredasr_provider = FireRedASRAEDProvider()
         if self._should_register_fireredasr():
             self.providers[self.fireredasr_provider.name] = self.fireredasr_provider.info()
+        self.ax_asr_provider = AXASRProvider()
+        if self._should_register_ax_asr():
+            self.providers[self.ax_asr_provider.name] = self.ax_asr_provider.info()
         self.jobs: dict[str, ASRJobResponse] = {}
 
     def list_providers(self) -> list[ProviderInfo]:
@@ -603,6 +708,13 @@ class ASRService:
             self.settings.enable_fireredasr_asr
             or self.settings.default_asr_provider == self.fireredasr_provider.name
             or bool(self.settings.fireredasr_repo_path)
+        )
+
+    def _should_register_ax_asr(self) -> bool:
+        return (
+            self.settings.enable_ax_asr
+            or self.settings.default_asr_provider == self.ax_asr_provider.name
+            or bool(self.settings.ax_asr_model_path)
         )
 
     async def transcribe(
@@ -728,6 +840,39 @@ class ASRService:
             )
             selected_model = model or str(metadata.get("model") or provider_info.models[0])
             selected_language = language or "zh"
+            segments = []
+            if enable_timestamps:
+                segments.append(
+                    ASRSegment(
+                        index=0,
+                        start_ms=0,
+                        end_ms=duration_ms,
+                        text=text,
+                        confidence=None,
+                        speaker="spk_0",
+                    )
+                )
+            return ASRResult(
+                trace_id=trace_id,
+                provider=provider_name,
+                model=selected_model,
+                language=selected_language,
+                text=text,
+                confidence=0.0,
+                duration_ms=duration_ms,
+                processing_ms=processing_ms,
+                segments=segments,
+                vad_segments=vad_segments,
+                speech_duration_ms=speech_duration_ms,
+                vad_processing_ms=vad_processing_ms,
+            )
+
+        if provider_name == self.ax_asr_provider.name:
+            text, metadata = self.ax_asr_provider.transcribe(transcribe_audio, transcribe_filename, selected_language)
+            processing_ms = int((perf_counter() - start) * 1000)
+            duration_ms = speech_duration_ms or max(1000, min(len(audio_content) // 16, 60000))
+            selected_model = model or str(metadata.get("model_type") or provider_info.models[0])
+            selected_language = str(metadata.get("language") or selected_language)
             segments = []
             if enable_timestamps:
                 segments.append(

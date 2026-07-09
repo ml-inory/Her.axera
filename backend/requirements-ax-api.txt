@@ -1,0 +1,9 @@
+# AX ASR API wheel (AX650 aarch64, cp311)
+# pip install https://github.com/AXERA-TECH/ax_asr_api/releases/download/v0.1.6/ax_asr_ax650.tar.gz
+# (wheel is inside the tar.gz; extract with: tar xzf ax_asr_ax650.tar.gz ax_asr-*.whl)
+
+# For direct wheel install (when available on Release):
+# pip install https://github.com/AXERA-TECH/ax_asr_api/releases/download/v0.1.6/ax_asr-0.1.0-cp311-cp311-linux_aarch64.whl
+
+# AX TTS API wheel (AX650 aarch64, cp311)
+# pip install https://github.com/AXERA-TECH/ax_tts_api/releases/download/v0.1.3/ax_tts-0.1.3-cp311-cp311-linux_aarch64.whl
