@@ -6,3 +6,9 @@ edge-tts>=7.0.0,<8.0.0
 silero-vad-axera>=0.1.1,<1.0.0
 opuslib>=3.0.1,<4.0.0
 noisereduce>=3.0.0,<4.0.0
+# AX ASR API wheel (AX650/ax630c/ax8850 aarch64)
+# Install from: https://github.com/AXERA-TECH/ax_asr_api/releases
+# ax_asr @ https://github.com/AXERA-TECH/ax_asr_api/releases/download/v0.1.5/ax650_ax_asr-0.1.0-cp310-cp310-linux_aarch64.whl
+# AX TTS API wheel (pure Python)
+# Install from: https://github.com/AXERA-TECH/ax_tts_api/releases
+# ax_tts @ https://github.com/AXERA-TECH/ax_tts_api/releases/download/v0.1.2/ax_tts-0.1.2-py3-none-any.whl

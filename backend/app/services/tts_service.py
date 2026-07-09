@@ -105,6 +105,21 @@ class TTSService:
                     "enabled": self._should_enable_zipvoice(),
                 },
             ),
+            "ax_tts": ProviderInfo(
+                name="ax_tts",
+                type="local",
+                models=["ax_tts_kokoro"],
+                languages=["zh-CN", "en-US", "ja-JP"],
+                audio_formats=["wav", "pcm"],
+                features=["axengine", "local_model", "voice", "speed", "ax_tts_api"],
+                metadata={
+                    "source_repo": "https://github.com/AXERA-TECH/ax_tts_api",
+                    "wheel_version": "0.1.2",
+                    "model_path": self.settings.ax_tts_model_path,
+                    "tts_type": self.settings.ax_tts_type,
+                    "enabled": self._should_enable_ax_tts(),
+                },
+            ),
         }
         self.voices = [
             VoiceInfo(
@@ -206,6 +221,8 @@ class TTSService:
             return await self._synthesize_edge_tts(trace_id, request, selected_model, selected_voice, start)
         if provider_name in {"kokoro", "zipvoice"}:
             return self._synthesize_axera_tts(trace_id, request, provider_name, selected_model, selected_voice, start)
+        if provider_name == "ax_tts":
+            return await self._synthesize_ax_tts(trace_id, request, selected_model, selected_voice, start)
 
         raise AppError("provider_not_found", f"TTS provider {provider_name} is not configured", status_code=404, stage="tts")
 
@@ -238,6 +255,9 @@ class TTSService:
 
     def _should_enable_zipvoice(self) -> bool:
         return bool(self.settings.enable_zipvoice_tts or self.settings.zipvoice_repo_path or self.settings.zipvoice_command)
+
+    def _should_enable_ax_tts(self) -> bool:
+        return bool(self.settings.enable_ax_tts)
 
     async def _synthesize_edge_tts(
         self,
