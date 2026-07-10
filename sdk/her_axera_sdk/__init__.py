@@ -251,6 +251,34 @@ class HerAxeraSDK:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
+    def stream_transcribe_init(self) -> None:
+        """Initialize streaming ASR. Call once before feeding chunks."""
+        asr = self._get_asr()
+        if hasattr(asr, 'stream_init'):
+            asr.stream_init()
+
+    def stream_transcribe_feed(self, pcm: np.ndarray, sample_rate: int = 16000) -> str | None:
+        """Feed an audio chunk and return partial transcription (if changed)."""
+        asr = self._get_asr()
+        if not hasattr(asr, 'stream_feed'):
+            raise RuntimeError("Streaming not supported by this ASR backend")
+        asr.stream_feed(pcm, sample_rate)
+        result = asr.stream_result()
+        return result if result else None
+
+    def stream_transcribe_result(self) -> str:
+        """Get the current partial streaming result."""
+        asr = self._get_asr()
+        if hasattr(asr, 'stream_result'):
+            return asr.stream_result()
+        return ""
+
+    def stream_transcribe_reset(self) -> None:
+        """Reset streaming state for a new utterance."""
+        asr = self._get_asr()
+        if hasattr(asr, 'stream_reset'):
+            asr.stream_reset()
+
     # ---- LLM ----
 
     def chat(self, message: str, *, system_prompt: str | None = None, temperature: float = 0.7) -> str:
