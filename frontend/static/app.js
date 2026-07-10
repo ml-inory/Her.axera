@@ -407,5 +407,107 @@ els.sessionId.addEventListener("change", () => {
 
 initControls();
 loadProviders();
+loadModelStatus();
 drawWaveform();
 setConnection("待机");
+
+// ---- Model Download ----
+
+const modelEls = {
+  downloadSection: document.querySelector("#modelDownloadSection"),
+  downloadList: document.querySelector("#modelDownloadList"),
+  downloadButton: document.querySelector("#downloadModelsButton"),
+};
+
+let modelPollTimer = null;
+
+async function loadModelStatus() {
+  const base = els.apiBase.value.replace(/\/$/, "");
+  try {
+    const resp = await fetch(`${base}/v1/models/download/status`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    renderModelStatus(data.models, data.all_ready);
+    if (data.all_ready) {
+      modelEls.downloadSection.style.display = "none";
+      if (modelPollTimer) { clearInterval(modelPollTimer); modelPollTimer = null; }
+      return;
+    }
+    modelEls.downloadSection.style.display = "block";
+    // Poll every 2s while downloading
+    const hasDownloading = data.models.some(m => m.status === "downloading");
+    if (hasDownloading && !modelPollTimer) {
+      modelPollTimer = setInterval(loadModelStatus, 2000);
+    }
+    if (!hasDownloading && modelPollTimer) {
+      clearInterval(modelPollTimer);
+      modelPollTimer = null;
+    }
+  } catch (err) {
+    // Backend might not have /models endpoint yet — hide panel
+    modelEls.downloadSection.style.display = "none";
+  }
+}
+
+function renderModelStatus(models, allReady) {
+  if (!models || models.length === 0) {
+    modelEls.downloadSection.style.display = "none";
+    return;
+  }
+  modelEls.downloadSection.style.display = "block";
+  modelEls.downloadList.innerHTML = models.map(m => {
+    const statusClass = {
+      "downloaded": "ready",
+      "downloading": "downloading",
+      "failed": "failed",
+    }[m.status] || "";
+    const pct = m.progress_pct || 0;
+    return `
+      <div class="modelItem">
+        <div class="modelLabel">
+          <span>${m.display_name}</span>
+          <span class="modelStatus ${statusClass}">${statusText(m)}</span>
+        </div>
+        <div class="progressBar">
+          <div class="progressFill ${m.status === 'failed' ? 'failed' : ''}" style="width:${pct}%"></div>
+        </div>
+        ${m.error_message ? `<div style="font-size:0.75rem;color:var(--danger);margin-top:2px">${m.error_message}</div>` : ""}
+      </div>`;
+  }).join("");
+
+  modelEls.downloadButton.style.display = allReady ? "none" : "inline-block";
+  modelEls.downloadButton.textContent = allReady ? "模型已就绪" : "下载所需模型";
+  modelEls.downloadButton.disabled = allReady;
+}
+
+function statusText(m) {
+  switch (m.status) {
+    case "downloaded": return "\u2714 已就绪";
+    case "downloading": return `\u23f3 ${Math.round(m.progress_pct)}%`;
+    case "failed": return "\u2718 失败";
+    case "not_started": return "\u25cb 待下载";
+    default: return m.status;
+  }
+}
+
+async function triggerModelDownload() {
+  const base = els.apiBase.value.replace(/\/$/, "");
+  modelEls.downloadButton.disabled = true;
+  modelEls.downloadButton.textContent = "正在启动...";
+  try {
+    const resp = await fetch(`${base}/v1/models/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_type: null }),
+    });
+    const data = await resp.json();
+    addEvent("model_download", `started ${data.started.length} model(s)`);
+    loadModelStatus();
+  } catch (err) {
+    addEvent("model_download_failed", err.message);
+    modelEls.downloadButton.disabled = false;
+    modelEls.downloadButton.textContent = "下载所需模型";
+  }
+}
+
+modelEls.downloadButton.addEventListener("click", triggerModelDownload);

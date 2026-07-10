@@ -8,3 +8,6 @@
 # AX TTS API wheel (AX650/ax630c/ax8850 aarch64 cp311)
 # Download from: https://github.com/AXERA-TECH/ax_tts_api/releases/tag/v0.1.4
 #   pip install https://github.com/AXERA-TECH/ax_tts_api/releases/download/v0.1.4/ax_tts-0.1.4-cp311-cp311-linux_aarch64.whl --break-system-packages
+
+# Required for lazy model download (auto-loaded on first ASR/TTS use)
+# huggingface_hub>=0.30.0

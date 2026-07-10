@@ -389,3 +389,44 @@ dd {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---- model download ---- */
+.modelItem {
+  margin-bottom: 12px;
+}
+
+.modelItem .modelLabel {
+  font-size: 0.82rem;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+}
+
+.modelItem .modelLabel .modelStatus {
+  font-weight: 600;
+}
+
+.modelItem .modelLabel .modelStatus.ready { color: var(--ok); }
+.modelItem .modelLabel .modelStatus.downloading { color: var(--accent); }
+.modelItem .modelLabel .modelStatus.failed { color: var(--danger); }
+
+.progressBar {
+  width: 100%;
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.progressBar .progressFill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.progressBar .progressFill.failed {
+  background: var(--danger);
+}
+
