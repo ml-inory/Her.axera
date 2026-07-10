@@ -1,19 +1,36 @@
 {
   "run_id": "refactor-20260710-0001",
-  "scope": "frontend/static + backend/app/services",
-  "target": "speed+size",
-  "tech_stack": "python (fastapi) + js (vanilla)",
-  "commands": [],
-  "tests": {
-    "passed": true,
-    "note": "no test suite configured"
+  "rounds": 3,
+  "results": {
+    "round1": {
+      "name": "streaming_TTS",
+      "status": "completed",
+      "change": "sentence→clause chunker",
+      "expected_improvement": "~50% first-word latency reduction"
+    },
+    "round2": {
+      "name": "parallel_TTS",
+      "status": "completed",
+      "change": "run_in_executor for TTS synthesis",
+      "expected_improvement": "no blocking between LLM and TTS"
+    },
+    "round3": {
+      "name": "frontend_polish",
+      "status": "completed",
+      "change": "skeleton screen + auto-retry",
+      "expected_improvement": "perceived load time + resilience"
+    }
   },
-  "frontend": {
-    "js_lines": 700,
-    "css_lines": 631,
-    "html_lines": 166
+  "final_frontend": {
+    "js_lines": 717,
+    "css_lines": 661,
+    "html_lines": 173
   },
-  "dialogue_tts_mode": "sentence_level",
-  "llm_stream": true,
-  "sessions": true
+  "files_changed": [
+    "backend/app/services/dialogue_service.py",
+    "backend/app/services/tts_service.py",
+    "frontend/static/app.js",
+    "frontend/static/index.html",
+    "frontend/static/styles.css"
+  ]
 }
