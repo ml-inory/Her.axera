@@ -598,8 +598,8 @@ els.sessionId.addEventListener("change", () => {
 //  INIT
 // ============================
 
-// Backend connection check for status bar
-(async () => {
+(async function init() {
+  // Check backend health
   try {
     const resp = await fetch(`${defaultApiBase()}/health`);
     if (resp.ok) {
@@ -607,5 +607,23 @@ els.sessionId.addEventListener("change", () => {
       els.obConnectionDot.className = "obConnDot online";
     }
   } catch (_) {}
+
   els.obDownloadButton.textContent = `一键下载 (~${totalModelSize()})`;
+
+  // Auto-detect: if models already ready, skip onboarding
+  try {
+    const resp = await fetch(`${defaultApiBase()}/v1/models/download/status`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.all_ready && data.models.length > 0) {
+        enterChat();
+        return;
+      }
+      // Pre-populate model list with current state
+      modelStates = {};
+      data.models.forEach(m => { modelStates[m.key] = m; });
+    }
+  } catch (_) {
+    // Backend may not have /models endpoint yet — stay on onboarding
+  }
 })();
