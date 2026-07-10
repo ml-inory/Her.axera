@@ -3,20 +3,69 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Her.axera Console</title>
+    <title>Her.axera — AX650 Voice AI</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="shell">
+    <!-- ====== Onboarding Wizard ====== -->
+    <main id="onboarding" class="onboarding">
+      <div class="onboardingCard">
+        <div class="obStep active" id="obStepWelcome">
+          <div class="obIcon">⚡</div>
+          <h1>Her.axera</h1>
+          <p class="obDesc">AX650 端侧语音助手</p>
+          <div class="obActions">
+            <button id="obStartButton" class="obPrimary">开始设置</button>
+          </div>
+        </div>
+
+        <div class="obStep" id="obStepModels">
+          <div class="obIcon">📦</div>
+          <h2>模型准备</h2>
+          <p class="obDesc">下载 ASR / TTS 模型到板上</p>
+          <div id="obModelList" class="obModelList"></div>
+          <div class="obActions">
+            <button id="obDownloadButton" class="obPrimary">一键下载 ({{totalSize}})</button>
+            <button id="obSkipModelsButton" class="obGhost">跳过，使用云端 API</button>
+          </div>
+        </div>
+
+        <div class="obStep" id="obStepDone">
+          <div class="obIcon">✅</div>
+          <h2>一切就绪</h2>
+          <p class="obDesc" id="obDoneText">模型已就绪，开始对话吧</p>
+          <div class="obActions">
+            <button id="obEnterButton" class="obPrimary">进入对话</button>
+          </div>
+        </div>
+
+        <div class="obDots" id="obDots">
+          <span class="obDot active"></span>
+          <span class="obDot"></span>
+          <span class="obDot"></span>
+        </div>
+      </div>
+      <!-- Lite status bar at bottom -->
+      <div class="obStatusBar" id="obStatusBar">
+        <span id="obStatusText">AX650 · Python 3.11 · 模型就绪</span>
+        <span id="obConnectionDot" class="obConnDot"></span>
+      </div>
+    </main>
+
+    <!-- ====== Chat Shell (hidden until onboarding done) ====== -->
+    <main id="chatShell" class="shell" style="display:none">
       <section class="stage" aria-label="Voice dialogue">
         <header class="topbar">
           <div>
             <p class="eyebrow">AX650 Voice Dialogue</p>
             <h1>Her.axera</h1>
           </div>
-          <div class="connection">
-            <span id="statusDot" class="dot"></span>
-            <span id="connectionText">未连接</span>
+          <div class="topbarActions">
+            <button id="openSettingsButton" class="iconButton" title="设置">⚙️</button>
+            <div class="connection">
+              <span id="statusDot" class="dot"></span>
+              <span id="connectionText">待机</span>
+            </div>
           </div>
         </header>
 
@@ -37,66 +86,64 @@
           </div>
         </section>
       </section>
-
-      <aside class="panel" aria-label="Controls">
-        <section class="group">
-          <h2>链路</h2>
-          <label>
-            API
-            <input id="apiBase" type="text" />
-          </label>
-          <label>
-            Session
-            <input id="sessionId" type="text" />
-          </label>
-          <div class="twoCol">
-            <label>
-              ASR
-              <select id="asrProvider"></select>
-            </label>
-            <label>
-              LLM
-              <select id="llmProvider"></select>
-            </label>
-          </div>
-          <div class="twoCol">
-            <label>
-              TTS
-              <select id="ttsProvider"></select>
-            </label>
-            <label>
-              Voice
-              <select id="voice"></select>
-            </label>
-          </div>
-          <label>
-            LLM API Key
-            <input id="llmApiKey" type="password" autocomplete="off" />
-          </label>
-        </section>
-
-        <section class="group">
-          <h2>指标</h2>
-          <dl class="metrics">
-            <div><dt>ASR</dt><dd id="asrMetric">-</dd></div>
-            <div><dt>LLM</dt><dd id="llmMetric">-</dd></div>
-            <div><dt>TTS</dt><dd id="ttsMetric">-</dd></div>
-            <div><dt>Total</dt><dd id="totalMetric">-</dd></div>
-          </dl>
-        </section>
-
-
-        <section class="group" id="modelDownloadSection" style="display:none">
-          <h2>模型下载</h2>
-          <div id="modelDownloadList"></div>
-          <button id="downloadModelsButton" class="ghostButton" type="button">下载所需模型</button>
-        </section>
-        <section class="group">
-          <h2>事件</h2>
-          <ol id="eventLog" class="eventLog"></ol>
-        </section>
-      </aside>
     </main>
+
+    <!-- ====== Settings Drawer ====== -->
+    <aside id="settingsDrawer" class="settingsDrawer">
+      <div class="settingsOverlay"></div>
+      <div class="settingsPanel">
+        <div class="settingsHeader">
+          <h2>设置</h2>
+          <button id="closeSettingsButton" class="iconButton" title="关闭">✕</button>
+        </div>
+        <div class="settingsBody">
+          <section class="group">
+            <h2>链路</h2>
+            <label>
+              API
+              <input id="apiBase" type="text" />
+            </label>
+            <label>
+              Session
+              <input id="sessionId" type="text" />
+            </label>
+            <div class="twoCol">
+              <label>ASR <select id="asrProvider"></select></label>
+              <label>LLM <select id="llmProvider"></select></label>
+            </div>
+            <div class="twoCol">
+              <label>TTS <select id="ttsProvider"></select></label>
+              <label>Voice <select id="voice"></select></label>
+            </div>
+            <label>
+              LLM API Key
+              <input id="llmApiKey" type="password" autocomplete="off" />
+            </label>
+          </section>
+
+          <section class="group">
+            <h2>指标</h2>
+            <dl class="metrics">
+              <div><dt>ASR</dt><dd id="asrMetric">-</dd></div>
+              <div><dt>LLM</dt><dd id="llmMetric">-</dd></div>
+              <div><dt>TTS</dt><dd id="ttsMetric">-</dd></div>
+              <div><dt>Total</dt><dd id="totalMetric">-</dd></div>
+            </dl>
+          </section>
+
+          <section class="group">
+            <h2>事件</h2>
+            <ol id="eventLog" class="eventLog"></ol>
+          </section>
+
+          <section class="group">
+            <h2>模型管理</h2>
+            <div id="settingsModelList"></div>
+            <button id="settingsDownloadButton" class="ghostButton" type="button">重新下载</button>
+          </section>
+        </div>
+      </div>
+    </aside>
 
     <template id="messageTemplate">
       <article class="message">
