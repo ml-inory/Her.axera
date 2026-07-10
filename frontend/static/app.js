@@ -282,6 +282,7 @@ function enterChat() {
 els.openSettingsButton.addEventListener("click", () => {
   els.settingsDrawer.classList.add("open");
   refreshSettingsModels();
+  loadSessionList();
 });
 els.closeSettingsButton.addEventListener("click", () => els.settingsDrawer.classList.remove("open"));
 document.querySelector(".settingsOverlay").addEventListener("click", () => els.settingsDrawer.classList.remove("open"));
@@ -552,6 +553,76 @@ function sendText() {
 }
 
 // ============================
+//  SESSION MANAGEMENT
+// ============================
+
+const sessionEls = {
+  sessionList: document.querySelector("#sessionList"),
+  newSessionButton: document.querySelector("#newSessionButton"),
+};
+
+async function loadSessionList() {
+  const base = defaultApiBase();
+  try {
+    const resp = await fetch(`${base}/v1/sessions`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderSessionList(data.sessions);
+  } catch (_) {}
+}
+
+function renderSessionList(sessions) {
+  if (!sessionEls.sessionList) return;
+  if (!sessions || sessions.length === 0) {
+    sessionEls.sessionList.innerHTML = '<div class="sessionItem empty">暂无会话</div>';
+    return;
+  }
+  const currentId = els.sessionId.value.trim();
+  sessionEls.sessionList.innerHTML = sessions.map(s => {
+    const active = s.session_id === currentId ? " active" : "";
+    const title = s.title || "新对话";
+    return `<div class="sessionItem${active}" data-sid="${s.session_id}" onclick="switchSession('${s.session_id}')">
+      <span class="sessionTitle">${title}</span>
+      <span class="sessionMeta">${s.message_count} 条 · ${fmtTime(s.last_active)}</span>
+    </div>`;
+  }).join("");
+}
+
+function switchSession(sid) {
+  els.sessionId.value = sid;
+  localStorage.setItem("her.sessionId", sid);
+  loadSessionList();
+  els.conversation.innerHTML = "";
+  els.eventLog.innerHTML = "";
+  addEvent("session_switch", sid);
+}
+
+function newSession() {
+  const sid = `ses_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  els.sessionId.value = sid;
+  localStorage.setItem("her.sessionId", sid);
+  els.conversation.innerHTML = "";
+  loadSessionList();
+}
+
+function fmtTime(iso) {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = now - d;
+    if (diff < 60000) return "刚刚";
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
+    return d.toLocaleDateString();
+  } catch (_) { return ""; }
+}
+
+sessionEls.newSessionButton.addEventListener("click", newSession);
+
+// ============================
+//  WAVEFORM
+// ============================// ============================
 //  WAVEFORM
 // ============================
 

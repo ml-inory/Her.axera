@@ -69,6 +69,7 @@ class LLMService:
                 metadata={"api_base": self.settings.openai_compat_api_base, "openai_compatible": True},
             )
         self.sessions: dict[str, list[ChatMessage]] = {}
+        self._session_meta: dict[str, dict] = {}  # {session_id: {title, created_at, last_active, user_id}}
         self.jobs: dict[str, LLMJobResponse] = {}
         self._load_sessions()
 
@@ -93,6 +94,7 @@ class LLMService:
             logger.info("Loaded %d sessions from %s", len(self.sessions), path)
         except Exception:  # noqa: BLE001
             logger.warning("Failed to load sessions from %s", path, exc_info=True)
+        self._load_session_meta()
 
     def _save_sessions(self) -> None:
         if not self.settings.enable_session_persistence:
@@ -106,8 +108,99 @@ class LLMService:
         msgs = self.sessions.get(session_id)
         if not msgs or len(msgs) <= self.settings.session_max_messages:
             return
-        # Keep only the last N messages.
         self.sessions[session_id] = msgs[-self.settings.session_max_messages :]
+
+    # ── Session Metadata ───────────────────────────────────────────
+
+    def _ensure_meta(self, session_id: str, user_id: str | None = None) -> None:
+        if session_id not in self._session_meta:
+            now = datetime.now().astimezone().isoformat()
+            self._session_meta[session_id] = {
+                "title": "",
+                "created_at": now,
+                "last_active": now,
+                "user_id": user_id,
+            }
+
+    def _touch_session(self, session_id: str) -> None:
+        if session_id in self._session_meta:
+            self._session_meta[session_id]["last_active"] = datetime.now().astimezone().isoformat()
+
+    def _auto_title(self, session_id: str) -> None:
+        """Generate a title from the first user message."""
+        if session_id not in self._session_meta:
+            return
+        meta = self._session_meta[session_id]
+        if meta.get("title"):
+            return
+        msgs = self.sessions.get(session_id, [])
+        for m in msgs:
+            if m.role == "user":
+                text = m.text_content.strip()
+                meta["title"] = text[:30] + ("..." if len(text) > 30 else "")
+                break
+        self._save_session_meta()
+
+    def _save_session_meta(self) -> None:
+        if not self.settings.enable_session_persistence:
+            return
+        path = _DATA_DIR / "session_meta.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._session_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            logger.warning("Failed to save session meta", exc_info=True)
+
+    def _load_session_meta(self) -> None:
+        if not self.settings.enable_session_persistence:
+            return
+        path = _DATA_DIR / "session_meta.json"
+        if not path.exists():
+            return
+        try:
+            self._session_meta = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to load session meta", exc_info=True)
+
+    def list_sessions(self, user_id: str | None = None) -> list[dict[str, object]]:
+        """List all sessions, optionally filtered by user."""
+        result = []
+        for sid, meta in self._session_meta.items():
+            if user_id and meta.get("user_id") != user_id:
+                continue
+            msgs = self.sessions.get(sid, [])
+            result.append({
+                "session_id": sid,
+                "title": meta.get("title", ""),
+                "message_count": len(msgs),
+                "created_at": meta.get("created_at", ""),
+                "last_active": meta.get("last_active", ""),
+                "user_id": meta.get("user_id"),
+            })
+        result.sort(key=lambda s: s["last_active"], reverse=True)
+        return result
+
+    def get_session(self, session_id: str) -> dict[str, object] | None:
+        meta = self._session_meta.get(session_id)
+        if not meta:
+            return None
+        msgs = self.sessions.get(session_id, [])
+        return {
+            "session_id": session_id,
+            "title": meta.get("title", ""),
+            "message_count": len(msgs),
+            "created_at": meta.get("created_at", ""),
+            "last_active": meta.get("last_active", ""),
+            "user_id": meta.get("user_id"),
+            "messages": [m.model_dump() for m in msgs],
+        }
+
+    def delete_session(self, session_id: str) -> bool:
+        self.sessions.pop(session_id, None)
+        self._session_meta.pop(session_id, None)
+        self._save_sessions()
+        self._save_session_meta()
+        return True
 
     # ── Provider helpers ───────────────────────────────────────────
 
@@ -183,6 +276,9 @@ class LLMService:
             self.sessions.setdefault(session_id, []).extend(request.messages)
             self.sessions[session_id].append(message)
             self._maybe_trim(session_id)
+            self._ensure_meta(session_id, request.user_id)
+            self._touch_session(session_id)
+            self._auto_title(session_id)
             self._save_sessions()
         prompt_tokens = sum(len(message.text_content) for message in request.messages)
         completion_tokens = len(content)
@@ -232,6 +328,9 @@ class LLMService:
             self.sessions.setdefault(session_id, []).extend(request.messages)
             self.sessions[session_id].append(message)
             self._maybe_trim(session_id)
+            self._ensure_meta(session_id, request.user_id)
+            self._touch_session(session_id)
+            self._auto_title(session_id)
             self._save_sessions()
         prompt_tokens = int(usage_data.get("prompt_tokens") or 0)
         completion_tokens = int(usage_data.get("completion_tokens") or 0)

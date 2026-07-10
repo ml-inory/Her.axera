@@ -224,6 +224,16 @@ class HerAxeraSDK:
     def downloader(self) -> ModelDownloader:
         return self._downloader
 
+    # ---- Session Management ----
+
+    def list_sessions(self, user_id: str | None = None) -> list[dict]:
+        """List all saved sessions."""
+        return self._llm.list_sessions(user_id=user_id)
+
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session and its messages."""
+        return self._llm.delete_session(session_id)
+
     # ---- ASR ----
 
     def transcribe(self, audio: str | bytes | np.ndarray, language: str = "zh") -> str:

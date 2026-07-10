@@ -264,6 +264,8 @@ class DialogueService:
     ) -> AsyncIterator[dict[str, object]]:
         start = perf_counter()
         session_id = session_id or f"ses_{uuid4().hex}"
+        llm_service._ensure_meta(session_id)
+        llm_service._touch_session(session_id)
         selected_language = language or "zh-CN"
 
         # Run ASR and speaker identification in parallel when speaker is enabled.
@@ -393,6 +395,8 @@ class DialogueService:
     ) -> AsyncIterator[dict[str, object]]:
         start = perf_counter()
         session_id = session_id or f"ses_{uuid4().hex}"
+        llm_service._ensure_meta(session_id)
+        llm_service._touch_session(session_id)
         selected_language = language or "zh-CN"
         user_text = text.strip()
         if not user_text:

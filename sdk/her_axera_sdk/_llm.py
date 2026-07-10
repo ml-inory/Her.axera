@@ -112,3 +112,25 @@ class LLMClient:
             "max_tokens": max_tokens,
             "stream": stream,
         }
+
+    def list_sessions(self, user_id: str | None = None) -> list[dict]:
+        """List saved sessions via the backend API."""
+        params = {}
+        if user_id:
+            params["user_id"] = user_id
+        resp = requests.get(
+            f"{self._api_base}/v1/sessions",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            params=params,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json().get("sessions", [])
+
+    def delete_session(self, session_id: str) -> bool:
+        resp = requests.delete(
+            f"{self._api_base}/v1/sessions/{session_id}",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            timeout=10,
+        )
+        return resp.status_code == 200

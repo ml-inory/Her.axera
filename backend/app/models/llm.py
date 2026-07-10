@@ -96,6 +96,20 @@ class SessionMessagesResponse(BaseModel):
     messages: list[ChatMessage]
 
 
+class SessionInfo(BaseModel):
+    session_id: str
+    title: str = ""
+    message_count: int = 0
+    created_at: str = ""
+    last_active: str = ""
+    user_id: str | None = None
+
+
+class SessionListResponse(BaseModel):
+    trace_id: str
+    sessions: list[SessionInfo]
+
+
 class DeleteSessionMessagesResponse(BaseModel):
     trace_id: str
     session_id: str
