@@ -629,3 +629,33 @@ button { border: 0; cursor: pointer; background: none; }
   flex-shrink: 0;
 }
 
+/* ---- skeleton loading ---- */
+.chatSkeleton {
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  display: none;
+}
+.skMsg {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  animation: skPulse 1.5s ease-in-out infinite;
+}
+.skMsg.skUser { flex-direction: row-reverse; }
+.skAvatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.skLine {
+  height: 14px;
+  background: var(--line);
+  border-radius: 7px;
+}
+@keyframes skPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+

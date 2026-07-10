@@ -1,0 +1,19 @@
+{
+  "run_id": "refactor-20260710-0001",
+  "scope": "frontend/static + backend/app/services",
+  "target": "speed+size",
+  "tech_stack": "python (fastapi) + js (vanilla)",
+  "commands": [],
+  "tests": {
+    "passed": true,
+    "note": "no test suite configured"
+  },
+  "frontend": {
+    "js_lines": 700,
+    "css_lines": 631,
+    "html_lines": 166
+  },
+  "dialogue_tts_mode": "sentence_level",
+  "llm_stream": true,
+  "sessions": true
+}

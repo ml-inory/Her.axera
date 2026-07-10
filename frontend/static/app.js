@@ -269,8 +269,13 @@ els.settingsDownloadButton.addEventListener("click", async () => {
 function enterChat() {
   els.onboarding.style.display = "none";
   els.chatShell.style.display = "grid";
+  // Show skeleton briefly while loading
+  const sk = document.querySelector("#chatSkeleton");
+  if (sk) sk.style.display = "flex";
   initControls();
-  loadProviders();
+  loadProviders().then(() => {
+    if (sk) sk.style.display = "none";
+  });
   drawWaveform();
   setConnection("待机");
 }
@@ -402,7 +407,19 @@ function openSocket() {
   state.socket = socket;
   socket.addEventListener("open", () => setConnection("已连接", "online"));
   socket.addEventListener("close", () => setConnection("未连接", ""));
-  socket.addEventListener("error", () => setConnection("连接错误", "error"));
+  let wsRetries = 0;
+  socket.addEventListener("error", () => {
+    setConnection("连接错误", "error");
+    if (wsRetries < 2) {
+      wsRetries++;
+      setTimeout(() => {
+        if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+          openSocket();
+        }
+      }, 2000);
+    }
+  });
+  socket.addEventListener("open", () => { wsRetries = 0; });
   socket.addEventListener("message", (event) => {
     try {
       handleMessage(JSON.parse(event.data));

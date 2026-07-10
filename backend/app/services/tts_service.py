@@ -197,6 +197,16 @@ class TTSService:
             return self.voices
         return [voice for voice in self.voices if voice.language == language]
 
+    def _synthesize_blocking(self, trace_id: str, request: SpeechRequest) -> SpeechResponse:
+        """Blocking wrapper for use with run_in_executor."""
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.get_event_loop()
+        except RuntimeError:
+            loop = _asyncio.new_event_loop()
+            _asyncio.set_event_loop(loop)
+        return loop.run_until_complete(self.synthesize(trace_id, request))
+
     async def synthesize(self, trace_id: str, request: SpeechRequest) -> SpeechResponse:
         start = perf_counter()
         provider_name = request.provider or self.settings.default_tts_provider

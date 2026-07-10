@@ -25,6 +25,9 @@ _SENTENCE_END_RE = re.compile(r"[。！？!?；;\n]")
 _EMOTION_RE = re.compile(r"^\[emotion:(\w+)\]\s*")
 EMOTION_PROMPT_SUFFIX = "\n\n在每次回复开头用 [emotion:XXX] 标签表示你的情绪状态。可选值：happy, sad, surprised, angry, neutral, thinking。标签后直接跟回复正文。"
 
+STREAMING_CHUNK_MIN = 4
+STREAMING_CHUNK_MAX = 60
+
 
 def _parse_emotion(text: str) -> tuple[str | None, str]:
     """Extract [emotion:XXX] tag from text start. Returns (emotion, cleaned_text)."""
@@ -32,6 +35,51 @@ def _parse_emotion(text: str) -> tuple[str | None, str]:
     if match:
         return match.group(1), text[match.end():]
     return None, text
+
+
+def _split_long(text: str, max_chars: int) -> list[str]:
+    """Split long text into chunks at max_chars boundaries."""
+    if len(text) <= max_chars:
+        return [text] if text.strip() else []
+    parts = []
+    t = text.strip()
+    while len(t) > max_chars:
+        parts.append(t[:max_chars].strip())
+        t = t[max_chars:].strip()
+    if t:
+        parts.append(t)
+    return parts
+
+
+def _extract_streaming_chunks(buffer: str) -> tuple[list[str], str]:
+    """Extract speakable chunks for low-latency TTS.
+    Sentence endings immediately flush, clause markers flush when >4 chars,
+    long runs split at 60 chars."""
+    chunks: list[str] = []
+    last_end = 0
+    for match in _SENTENCE_END_RE.finditer(buffer):
+        end = match.end()
+        part = buffer[last_end:end].strip()
+        if part:
+            chunks.extend(_split_long(part, STREAMING_CHUNK_MAX))
+        last_end = end
+    remaining = buffer[last_end:]
+    clause_chunks = []
+    clause_last = 0
+    for match in _CLAUSE_END_RE.finditer(remaining):
+        end = match.end()
+        part = remaining[clause_last:end].strip()
+        if part and len(remaining[:end]) >= STREAMING_CHUNK_MIN:
+            clause_chunks.extend(_split_long(part, STREAMING_CHUNK_MAX))
+            clause_last = end
+    chunks.extend(clause_chunks)
+    final_remaining = remaining[clause_last:]
+    if len(final_remaining) >= STREAMING_CHUNK_MAX:
+        splits = _split_long(final_remaining, STREAMING_CHUNK_MAX)
+        if len(splits) > 1:
+            chunks.extend(splits[:-1])
+            final_remaining = splits[-1]
+    return chunks, final_remaining
 
 
 def _extract_complete_sentences(buffer: str, max_chars: int = 80) -> tuple[list[str], str]:
@@ -112,8 +160,8 @@ class DialogueService:
                     "session_id": session_id,
                 }
 
-            # Check for complete sentences in buffer.
-            sentences, buffer = _extract_complete_sentences(buffer)
+            # Stream to TTS: flush clauses and short chunks for low latency
+            sentences, buffer = _extract_streaming_chunks(buffer)
             for sentence in sentences:
                 yield {
                     "type": "llm_delta",
