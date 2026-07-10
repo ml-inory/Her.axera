@@ -321,6 +321,111 @@ class TTSService:
             cache_hit=False,
         )
 
+    # --- AX TTS API (ax_tts wheel) ---
+
+    async def _synthesize_ax_tts(
+        self,
+        trace_id: str,
+        request: SpeechRequest,
+        selected_model: str,
+        selected_voice: str,
+        start: float,
+    ) -> SpeechResponse:
+        try:
+            from ax_tts import AX_TTS
+        except ImportError as exc:
+            raise AppError(
+                "ax_tts_not_installed",
+                "ax_tts wheel is not installed. Install from: "
+                "https://github.com/AXERA-TECH/ax_tts_api/releases",
+                status_code=503,
+                stage="tts",
+                retryable=True,
+            ) from exc
+
+        voice = selected_voice if selected_voice != "female_default" else self.settings.ax_tts_voice
+
+        # Lazy load: check if models exist
+        from pathlib import Path as _Path
+        model_dir = _Path(self.settings.ax_tts_model_path).expanduser().resolve()
+        expected_file = model_dir / "kokoro" / "kokoro_part1_96.axmodel"
+        if not expected_file.exists():
+            from app.services.model_download_service import get_model_download_manager
+            mgr = get_model_download_manager()
+            started = mgr.start_download_all(model_type="tts")
+            if started:
+                raise AppError(
+                    "ax_tts_model_not_ready",
+                    f"TTS models are being downloaded ({len(started)} model(s) queued). "
+                    "Track progress at GET /v1/models/download/status?model_type=tts",
+                    status_code=503,
+                    stage="tts",
+                    retryable=True,
+                )
+            raise AppError(
+                "ax_tts_model_not_found",
+                f"TTS model not found at {expected_file}. "
+                "Trigger download at POST /v1/models/download or run download_models.sh",
+                status_code=503,
+                stage="tts",
+                retryable=True,
+            )
+
+        try:
+            tts = AX_TTS(
+                model_path=self.settings.ax_tts_model_path,
+                espeak_data_path=self.settings.ax_tts_espeak_data_path,
+                jieba_dict_path=self.settings.ax_tts_jieba_dict_path,
+                max_seq_len=self.settings.ax_tts_max_seq_len,
+                tts_type=self.settings.ax_tts_type,
+            )
+            sr, audio_np = tts.synthesize(
+                request.text,
+                language=request.language,
+                voice=voice,
+                speed=request.speed,
+                fade_out=self.settings.ax_tts_fade_out,
+                sample_rate=self.settings.ax_tts_sample_rate,
+            )
+            tts.close()
+        except Exception as exc:
+            raise AppError(
+                "ax_tts_synthesis_failed",
+                f"AX TTS synthesis failed: {exc}",
+                status_code=502,
+                stage="tts",
+                retryable=True,
+            ) from exc
+
+        import numpy as np
+        import io
+        import wave as _wave
+
+        pcm = (np.clip(audio_np, -1.0, 1.0) * 32767).astype(np.int16)
+        buf = io.BytesIO()
+        with _wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(pcm.tobytes())
+        audio_content = buf.getvalue()
+
+        duration_ms = int(len(audio_np) / sr * 1000)
+        return SpeechResponse(
+            trace_id=trace_id,
+            provider="ax_tts",
+            model=selected_model,
+            voice=voice,
+            language=request.language,
+            audio_url=None,
+            audio_base64=b64encode(audio_content).decode("ascii") if request.return_audio_base64 else None,
+            audio_format=request.audio_format,
+            sample_rate=sr,
+            duration_ms=duration_ms,
+            processing_ms=int((perf_counter() - start) * 1000),
+            cache_hit=False,
+        )
+
     def _synthesize_axera_tts(
         self,
         trace_id: str,

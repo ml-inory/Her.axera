@@ -609,8 +609,33 @@ class AXASRProvider:
                 retryable=True,
             )
 
+        # Lazy load: check if models exist, trigger download if not
+        from pathlib import Path as _Path
+        model_dir = _Path(model_path).expanduser().resolve()
+        if not model_dir.exists() or not any(model_dir.iterdir()):
+            from app.services.model_download_service import get_model_download_manager
+            mgr = get_model_download_manager()
+            started = mgr.start_download_all(model_type="asr")
+            if started:
+                raise AppError(
+                    "ax_asr_model_not_ready",
+                    f"ASR models are being downloaded ({len(started)} model(s) queued). "
+                    "Track progress at GET /v1/models/download/status?model_type=asr",
+                    status_code=503,
+                    stage="asr",
+                    retryable=True,
+                )
+            raise AppError(
+                "ax_asr_model_not_found",
+                f"Model directory is empty: {model_dir}. "
+                "Trigger download at POST /v1/models/download or run download_models.sh",
+                status_code=503,
+                stage="asr",
+                retryable=True,
+            )
+
         try:
-            return AX_ASR(self.settings.ax_asr_model_type, model_path)
+            return AX_ASR(self.settings.ax_asr_model_type, str(model_dir))
         except Exception as exc:
             raise AppError(
                 "ax_asr_init_failed",
