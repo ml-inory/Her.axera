@@ -18,7 +18,7 @@ try:
     import opuslib  # type: ignore[import-untyped]
 
     _opus_ok = True
-except ImportError:
+except Exception:
     opuslib = None  # type: ignore[assignment]
 
 

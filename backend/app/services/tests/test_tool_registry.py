@@ -32,7 +32,7 @@ class TestToolRegistry:
 
     def test_execute_invalid_args(self) -> None:
         reg = ToolRegistry()
-        reg.register("boom", {"description": "fails"}, lambda: ""["nonexistent"])
+        reg.register("boom", {"description": "fails"}, lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         result = reg.execute("boom", "{}")
         assert "error" in result
 
