@@ -40,6 +40,8 @@ Prepare backend dependencies:
 scripts/ax650_setup_backend.sh
 ```
 
+The base backend install includes `silero-vad-axera`. The setup script keeps the venv isolated by default, then links the board-provided `axengine` package into that venv when available so the default environment does not inherit system `torch`. The generated `backend/.env` also includes `/soc/lib` in `LD_LIBRARY_PATH` so AX650 can load `libax_engine.so` through `AxEngineExecutionProvider`.
+
 Optionally download selected models. The downloader uses `huggingface_hub` and defaults to `https://hf-mirror.com`:
 
 ```bash
