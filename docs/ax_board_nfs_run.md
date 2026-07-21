@@ -60,6 +60,20 @@ Validate from the board:
 curl http://127.0.0.1:8080/health
 ```
 
+Install a managed systemd service after setup:
+
+```bash
+scripts/ax650_install_service.sh --enable --start
+```
+
+Useful service commands:
+
+```bash
+systemctl status her-axera-backend.service
+journalctl -u her-axera-backend.service -f
+sudo systemctl restart her-axera-backend.service
+```
+
 ## PC Frontend
 
 Run the static frontend on the PC and point it at the AX650 backend:

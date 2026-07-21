@@ -66,6 +66,12 @@ scripts/ax650_run_backend.sh --host 0.0.0.0 --port 8080
 curl http://127.0.0.1:8080/health
 ```
 
+需要开机自启动时安装 systemd 服务：
+
+```bash
+scripts/ax650_install_service.sh --enable --start
+```
+
 ### 3. 在 PC 上启动前端
 
 ```bash
