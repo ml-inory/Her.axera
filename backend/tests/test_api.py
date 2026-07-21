@@ -67,7 +67,7 @@ def test_openai_compatible_cascade_endpoints() -> None:
     assert llm_response.status_code == 200
     llm_payload = llm_response.json()
     assert llm_payload["provider"] == "mock_llm"
-    assert llm_payload["choices"][0]["message"]["content"].startswith("收到")
+    assert len(llm_payload["choices"][0]["message"]["content"]) > 5
 
     tts_response = client.post(
         "/v1/audio/speech",

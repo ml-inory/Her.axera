@@ -38,6 +38,35 @@ def _pitch(value: float) -> str:
 
 
 def _mock_wav(text: str, sample_rate: int) -> tuple[bytes, int]:
+    """Generate a sine-tone WAV with harmonics to simulate speech."""
+    import io, math, struct, wave
+    from hashlib import md5
+    import random
+
+    seed = int(md5(text.encode()).hexdigest()[:8], 16)
+    rng = random.Random(seed)
+    base_freq = rng.choice([180, 200, 220, 250])
+    duration_ms = max(500, min(5000, len(text) * 80))
+    n_samples = int(sample_rate * duration_ms / 1000)
+
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        samples = []
+        for i in range(n_samples):
+            t = i / sample_rate
+            env = max(0.0, 1.0 - i / n_samples)
+            # Fundamental + 3 harmonics with formant-like weighting
+            s = 0.5 * math.sin(2 * math.pi * base_freq * t)
+            s += 0.3 * math.sin(2 * math.pi * base_freq * 2 * t)
+            s += 0.15 * math.sin(2 * math.pi * base_freq * 3 * t)
+            s += 0.08 * math.sin(2 * math.pi * base_freq * 4 * t)
+            s *= env * 0.4
+            samples.append(int(max(-32768, min(32767, s * 32767))))
+        w.writeframes(struct.pack(f'<{n_samples}h', *samples))
+    return buf.getvalue(), duration_ms
     duration_ms = max(350, min(2200, len(text) * 90))
     frame_count = int(sample_rate * duration_ms / 1000)
     buffer = BytesIO()

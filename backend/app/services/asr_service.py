@@ -925,7 +925,26 @@ class ASRService:
                 vad_processing_ms=vad_processing_ms,
             )
 
-        text = f"这是来自 {transcribe_filename or 'audio'} 的模拟识别结果。"
+        import hashlib
+        _MOCK_TEXTS = [
+            "今天天气真不错，适合出去走走。",
+            "帮我查一下明天上海的天气怎么样。",
+            "播放一首轻松的音乐吧。",
+            "讲个笑话听听。",
+            "你觉得人工智能未来会取代人类工作吗？",
+            "附近有什么好吃的推荐吗？",
+            "最近睡眠不太好，有什么建议吗？",
+            "把客厅的灯调暗一点。",
+            "现在几点了？",
+            "帮我设置一个明天早上七点的闹钟。",
+            "最近有什么好看的电影吗？",
+            "我想学做红烧肉，能教我吗？",
+            "今天心情不太好，陪我聊聊吧。",
+            "世界上最深的海沟在哪里？",
+            "帮我翻译一下这段话到英文。",
+        ]
+        idx = int(hashlib.md5(audio_content[:1024]).hexdigest(), 16) % len(_MOCK_TEXTS)
+        text = _MOCK_TEXTS[idx]
         processing_ms = int((perf_counter() - start) * 1000)
         duration_ms = speech_duration_ms or max(1000, min(len(audio_content) // 16, 60000))
         segments = []

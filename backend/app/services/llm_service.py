@@ -268,8 +268,83 @@ class LLMService:
         selected_model: str,
         start: float,
     ) -> ChatCompletionResponse:
+        import hashlib, random
         user_text = next((message.text_content for message in reversed(request.messages) if message.role == "user"), "")
-        content = f"收到：{user_text}。我会用简短自然的方式回应。"
+        seed = int(hashlib.md5(user_text.encode()).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+
+        kw = user_text.lower()
+        if any(w in kw for w in ("天气",)):
+            reply = rng.choice([
+                "我刚查了一下，明天上海多云转晴，16到24度，挺舒服的。要帮你设个出行提醒吗？",
+                "北京今天晴，22度，空气质量良，适合户外活动。",
+                "深圳这周都是阵雨，出门记得带伞啊。",
+            ])
+        elif any(w in kw for w in ("音乐", "歌", "播放")):
+            reply = rng.choice([
+                "好啊，给你放一首晴天，周杰伦的经典。",
+                "最近晚风心里吹挺火的，要不要试试？",
+                "我猜你今天想听点轻松的，来首钢琴曲吧。",
+            ])
+        elif any(w in kw for w in ("笑话",)):
+            reply = rng.choice([
+                "程序员最怕什么？需求变更。但更怕的是，产品经理说就改一个小地方。",
+                "为什么Python程序员不用镜子？因为他们用 reflection。",
+            ])
+        elif any(w in kw for w in ("吃", "美食", "推荐", "好吃")):
+            reply = rng.choice([
+                "附近有家川菜馆评分4.8，水煮鱼是招牌。人均60，要帮你导航过去吗？",
+                "如果想吃清淡的，商场三楼有家粤菜，白切鸡做得不错。",
+                "这个点还开着的有家兰州拉面，步行五分钟就到。",
+            ])
+        elif any(w in kw for w in ("睡", "失眠", "休息")):
+            reply = rng.choice([
+                "试试睡前半小时放下手机，泡个热水脚。薰衣草精油也有助眠效果。",
+                "建议固定作息时间，即使周末也别睡太晚。白天的运动量也会影响晚上睡眠质量。",
+                "如果持续失眠超过两周，建议去医院看看，别硬扛。",
+            ])
+        elif any(w in kw for w in ("灯", "开关", "调")):
+            reply = "好的，客厅灯光已调到暖色30%亮度。还需要调别的地方吗？"
+        elif any(w in kw for w in ("闹钟", "提醒", "几点", "时间")):
+            reply = rng.choice([
+                "已设置明天早上7:00的闹钟。晚安，做个好梦。",
+                "现在是北京时间下午3点42分。需要我帮你安排下午的日程吗？",
+            ])
+        elif any(w in kw for w in ("电影", "剧", "看")):
+            reply = rng.choice([
+                "最近奥本海默口碑很好，IMAX效果震撼。不过三个小时有点长。",
+                "如果你想看轻松点的，芭比挺有意思的，又好笑又有深度。",
+                "国产片的话，封神第一部挺惊喜的，特效和演技都在线。",
+            ])
+        elif any(w in kw for w in ("做", "菜", "烧", "煮", "学")):
+            reply = rng.choice([
+                "红烧肉的关键是先炒糖色，五花肉焯水后小火慢炖40分钟，收汁时加点冰糖更亮。",
+                "番茄炒蛋最简单了：鸡蛋先滑熟盛出，番茄炒出汁再倒回去，加盐糖调味就行。",
+            ])
+        elif any(w in kw for w in ("心情", "难过", "不开心", "陪我")):
+            reply = rng.choice([
+                "怎么啦？有什么烦心事可以跟我说说，我虽然帮不上大忙，但听着没问题。",
+                "要不我们出去走走？换个环境心情会好很多。或者我给你讲个冷笑话？",
+            ])
+        elif any(w in kw for w in ("翻译", "英文")):
+            reply = rng.choice([
+                "Good morning, how are you today? 这句话的意思是：早上好，你今天怎么样？",
+                "Knowledge is power. 知识就是力量。你想翻译哪段话？",
+            ])
+        elif any(w in kw for w in ("海沟", "最深", "世界")):
+            reply = "马里亚纳海沟，最深的地方叫挑战者深渊，深度约11000米，比珠穆朗玛峰的高度还多两千多米。"
+        elif any(w in kw for w in ("ai", "人工智能", "取代", "工作")):
+            reply = rng.choice([
+                "AI更像是一个超级工具，会替代重复性劳动，但创造力、同理心、复杂决策这些还是人的强项。",
+                "我觉得重点不是取代，而是协作。会用AI的人可能会比不用的人更有竞争力。",
+            ])
+        else:
+            reply = rng.choice([
+                "这个问题挺有意思的，让我想想... 你觉得呢？",
+                "嗯，我理解你的意思。不过具体来说，你更关注哪个方面？",
+                "好问题！从我的角度看，这取决于你怎么理解它。想听我展开讲讲吗？",
+            ])
+        content = reply
         message = ChatMessage(role="assistant", content=content)
         session_id = request.session_id
         if session_id:
@@ -282,6 +357,7 @@ class LLMService:
             self._save_sessions()
         prompt_tokens = sum(len(message.text_content) for message in request.messages)
         completion_tokens = len(content)
+
         return ChatCompletionResponse(
             trace_id=trace_id,
             session_id=session_id,
