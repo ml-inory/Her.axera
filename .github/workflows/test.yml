@@ -1,0 +1,55 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-model-download.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run tests
+        run: python -m pytest app/ tests/ -v -k "not (ws or websocket or dialogue)" --tb=short
+
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax check
+        run: |
+          bash -n deploy.sh && echo "OK: deploy.sh"
+          for f in scripts/*.sh; do bash -n "$f" && echo "OK: $f"; done
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Deploy script tests
+        run: |
+          pip install pytest
+          python -m pytest backend/tests/test_deploy_scripts.py backend/tests/test_download_ax_models.py -v

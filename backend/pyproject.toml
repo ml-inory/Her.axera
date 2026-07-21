@@ -13,5 +13,13 @@ dependencies = [
   "silero-vad-axera>=0.1.1,<1.0.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-asyncio>=0.24", "httpx>=0.28"]
+
 [tool.ruff]
 line-length = 120
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["app", "tests"]
+asyncio_mode = "auto"

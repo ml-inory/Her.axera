@@ -1,0 +1,314 @@
+{
+  "goal": "全仓库补齐行为级测试，搭建 GitHub CI 自动运行",
+  "created_at": "2026-07-21T07:20:59.733534+00:00",
+  "metrics_config": [
+    {
+      "name": "test_count",
+      "command": "pytest --collect-only -q",
+      "description": "测试用例总数"
+    }
+  ],
+  "integration": {
+    "target": "github",
+    "status": "pending"
+  },
+  "modules": [
+    {
+      "path": "backend/app/core",
+      "name": "core_tracing",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 0,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/core",
+      "name": "core_errors",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 0,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/core",
+      "name": "core_config",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/core",
+      "name": "core_audio_codec",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 0,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_common",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 0,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_user",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 0,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_asr",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "models_common"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_llm",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "models_common"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_tts",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "models_common"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_speaker",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "models_common"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/models",
+      "name": "models_openai",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 2,
+      "dependencies": [
+        "models_llm"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_tool_registry",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 0,
+      "dependencies": [],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_user",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_config",
+        "models_user"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_vad",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_config",
+        "core_errors",
+        "models_asr"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_wakeword",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_config"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_model_download",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_config"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_llm",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_config",
+        "core_errors",
+        "models_common",
+        "models_llm"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_asr",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 2,
+      "dependencies": [
+        "core_config",
+        "core_errors",
+        "models_asr",
+        "models_common",
+        "services_vad",
+        "services_model_download"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_tts",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 2,
+      "dependencies": [
+        "core_config",
+        "core_errors",
+        "models_common",
+        "models_tts",
+        "services_model_download"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_speaker",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 2,
+      "dependencies": [
+        "core_config",
+        "core_errors",
+        "models_common",
+        "models_speaker"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/services",
+      "name": "services_dialogue",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 3,
+      "dependencies": [
+        "core_config",
+        "core_audio_codec",
+        "models_llm",
+        "models_tts",
+        "services_asr",
+        "services_llm",
+        "services_tts",
+        "services_speaker"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app/api",
+      "name": "api_deps",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_tracing"
+      ],
+      "test_files": []
+    },
+    {
+      "path": "backend/app",
+      "name": "main",
+      "language": "python",
+      "test_framework": "pytest",
+      "status": "pending",
+      "topo_level": 1,
+      "dependencies": [
+        "core_config",
+        "core_errors"
+      ],
+      "test_files": [
+        "backend/tests/test_api.py"
+      ]
+    }
+  ],
+  "current_module_index": -1,
+  "current_phase": null,
+  "assumptions": [
+    "使用 mock provider 测试，无需真实模型文件",
+    "测试仅依赖 requirements.txt 中已有依赖 + pytest + httpx"
+  ],
+  "pre_existing_changes": "?? AGENTS.md\n?? backend/data/\n?? docker-images/\n?? docs/milestone.md"
+}
