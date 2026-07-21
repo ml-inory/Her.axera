@@ -54,13 +54,6 @@
 
     <!-- ====== Chat Shell (hidden until onboarding done) ====== -->
     <main id="chatShell" class="shell" style="display:none">
-      <!-- Skeleton loading screen -->
-      <div id="chatSkeleton" class="chatSkeleton" style="display:flex">
-        <div class="skMsg skAssistant"><div class="skAvatar"></div><div class="skLine" style="width:60%"></div></div>
-        <div class="skMsg skAssistant"><div class="skAvatar"></div><div class="skLine" style="width:80%"></div></div>
-        <div class="skMsg skAssistant"><div class="skAvatar"></div><div class="skLine" style="width:45%"></div></div>
-        <div class="skMsg skUser"><div class="skLine" style="width:35%"></div><div class="skAvatar"></div></div>
-      </div>
       <section class="stage" aria-label="Voice dialogue">
         <header class="topbar">
           <div>
@@ -141,12 +134,6 @@
           <section class="group">
             <h2>事件</h2>
             <ol id="eventLog" class="eventLog"></ol>
-          </section>
-
-          <section class="group">
-            <h2>会话</h2>
-            <div id="sessionList" class="sessionList"></div>
-            <button id="newSessionButton" class="ghostButton" type="button">新建会话</button>
           </section>
 
           <section class="group">

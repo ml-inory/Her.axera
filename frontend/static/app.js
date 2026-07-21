@@ -269,13 +269,8 @@ els.settingsDownloadButton.addEventListener("click", async () => {
 function enterChat() {
   els.onboarding.style.display = "none";
   els.chatShell.style.display = "grid";
-  // Show skeleton briefly while loading
-  const sk = document.querySelector("#chatSkeleton");
-  if (sk) sk.style.display = "flex";
   initControls();
-  loadProviders().then(() => {
-    if (sk) sk.style.display = "none";
-  });
+  loadProviders();
   drawWaveform();
   setConnection("待机");
 }
@@ -287,7 +282,6 @@ function enterChat() {
 els.openSettingsButton.addEventListener("click", () => {
   els.settingsDrawer.classList.add("open");
   refreshSettingsModels();
-  loadSessionList();
 });
 els.closeSettingsButton.addEventListener("click", () => els.settingsDrawer.classList.remove("open"));
 document.querySelector(".settingsOverlay").addEventListener("click", () => els.settingsDrawer.classList.remove("open"));
@@ -407,19 +401,7 @@ function openSocket() {
   state.socket = socket;
   socket.addEventListener("open", () => setConnection("已连接", "online"));
   socket.addEventListener("close", () => setConnection("未连接", ""));
-  let wsRetries = 0;
-  socket.addEventListener("error", () => {
-    setConnection("连接错误", "error");
-    if (wsRetries < 2) {
-      wsRetries++;
-      setTimeout(() => {
-        if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
-          openSocket();
-        }
-      }, 2000);
-    }
-  });
-  socket.addEventListener("open", () => { wsRetries = 0; });
+  socket.addEventListener("error", () => setConnection("连接错误", "error"));
   socket.addEventListener("message", (event) => {
     try {
       handleMessage(JSON.parse(event.data));
@@ -570,76 +552,6 @@ function sendText() {
 }
 
 // ============================
-//  SESSION MANAGEMENT
-// ============================
-
-const sessionEls = {
-  sessionList: document.querySelector("#sessionList"),
-  newSessionButton: document.querySelector("#newSessionButton"),
-};
-
-async function loadSessionList() {
-  const base = defaultApiBase();
-  try {
-    const resp = await fetch(`${base}/v1/sessions`);
-    if (!resp.ok) return;
-    const data = await resp.json();
-    renderSessionList(data.sessions);
-  } catch (_) {}
-}
-
-function renderSessionList(sessions) {
-  if (!sessionEls.sessionList) return;
-  if (!sessions || sessions.length === 0) {
-    sessionEls.sessionList.innerHTML = '<div class="sessionItem empty">暂无会话</div>';
-    return;
-  }
-  const currentId = els.sessionId.value.trim();
-  sessionEls.sessionList.innerHTML = sessions.map(s => {
-    const active = s.session_id === currentId ? " active" : "";
-    const title = s.title || "新对话";
-    return `<div class="sessionItem${active}" data-sid="${s.session_id}" onclick="switchSession('${s.session_id}')">
-      <span class="sessionTitle">${title}</span>
-      <span class="sessionMeta">${s.message_count} 条 · ${fmtTime(s.last_active)}</span>
-    </div>`;
-  }).join("");
-}
-
-function switchSession(sid) {
-  els.sessionId.value = sid;
-  localStorage.setItem("her.sessionId", sid);
-  loadSessionList();
-  els.conversation.innerHTML = "";
-  els.eventLog.innerHTML = "";
-  addEvent("session_switch", sid);
-}
-
-function newSession() {
-  const sid = `ses_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-  els.sessionId.value = sid;
-  localStorage.setItem("her.sessionId", sid);
-  els.conversation.innerHTML = "";
-  loadSessionList();
-}
-
-function fmtTime(iso) {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const diff = now - d;
-    if (diff < 60000) return "刚刚";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`;
-    return d.toLocaleDateString();
-  } catch (_) { return ""; }
-}
-
-sessionEls.newSessionButton.addEventListener("click", newSession);
-
-// ============================
-//  WAVEFORM
-// ============================// ============================
 //  WAVEFORM
 // ============================
 
@@ -686,8 +598,8 @@ els.sessionId.addEventListener("change", () => {
 //  INIT
 // ============================
 
-(async function init() {
-  // Check backend health
+// Backend connection check for status bar
+(async () => {
   try {
     const resp = await fetch(`${defaultApiBase()}/health`);
     if (resp.ok) {
@@ -695,23 +607,5 @@ els.sessionId.addEventListener("change", () => {
       els.obConnectionDot.className = "obConnDot online";
     }
   } catch (_) {}
-
   els.obDownloadButton.textContent = `一键下载 (~${totalModelSize()})`;
-
-  // Auto-detect: if models already ready, skip onboarding
-  try {
-    const resp = await fetch(`${defaultApiBase()}/v1/models/download/status`);
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.all_ready && data.models.length > 0) {
-        enterChat();
-        return;
-      }
-      // Pre-populate model list with current state
-      modelStates = {};
-      data.models.forEach(m => { modelStates[m.key] = m; });
-    }
-  } catch (_) {
-    // Backend may not have /models endpoint yet — stay on onboarding
-  }
 })();
