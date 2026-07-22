@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Her.axera — AX650 Voice AI</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=4" />
   </head>
   <body>
     <!-- ====== Onboarding Wizard ====== -->
@@ -24,6 +24,10 @@
           <h2>模型准备</h2>
           <p class="obDesc">下载 ASR / TTS 模型到板上</p>
           <div id="obModelList" class="obModelList"></div>
+          <div class="obDiskSection">
+            <div class="obDiskTitle">模型存放目录</div>
+            <div id="obDiskInfo" class="obDiskList">加载磁盘信息...</div>
+          </div>
           <div class="obActions">
             <button id="obDownloadButton" class="obPrimary">一键下载 ({{totalSize}})</button>
             <button id="obSkipModelsButton" class="obGhost">跳过，使用云端 API</button>
@@ -151,10 +155,11 @@
         <div>
           <div class="messageMeta"></div>
           <p class="messageText"></p>
+          <button class="replayBtn" title="回听语音">▶ 回听</button>
         </div>
       </article>
     </template>
 
-    <script src="./app.js" defer></script>
+    <script src="./app.js?v=4" defer></script>
   </body>
 </html>

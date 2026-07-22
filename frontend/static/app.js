@@ -1,3 +1,4 @@
+console.log("app.js v2.3 - replay fix");
 // ===== Her.axera Frontend =====
 // Onboarding wizard → model download → chat interface
 
@@ -19,6 +20,27 @@ const MODEL_SPECS = [
 function totalModelSize() {
   let n = 0; MODEL_SPECS.forEach(s => { const m = s.size.match(/(\d+)/); if (m) n += +m[1]; });
   return n >= 1000 ? `${(n / 1000).toFixed(1)} GB` : `${n} MB`;
+}
+
+function selectedModelSize() {
+  let n = 0;
+  MODEL_SPECS.forEach(s => {
+    if (selectedModels.has(s.key)) { const m = s.size.match(/(\d+)/); if (m) n += +m[1]; }
+  });
+  return n >= 1000 ? `${(n / 1000).toFixed(1)} GB` : `${n} MB`;
+}
+
+function getSelectedKeys(models) {
+  // Filter to only not-downloaded, not-downloading models that are selected
+  const keys = [];
+  for (const spec of MODEL_SPECS) {
+    if (!selectedModels.has(spec.key)) continue;
+    const state = modelStates[spec.key];
+    if (!state || (state.status !== "downloaded" && state.status !== "downloading")) {
+      keys.push(spec.key);
+    }
+  }
+  return keys;
 }
 
 // ---- DOM refs ----
@@ -70,6 +92,9 @@ const els = {
 let obStep = 0;
 let modelPollTimer = null;
 let modelStates = {};
+let selectedModels = new Set();
+let modelRoot = "";
+let _modelsInitialized = false;
 
 // ---- State ----
 const state = {
@@ -80,6 +105,9 @@ const state = {
   ttsCount: 0,
   ttsMs: 0,
   audioQueue: [],
+  currentResponseAudio: [],
+  streamingReceived: false,
+  lastAssistantNode: null,
   audioPlaying: false,
   activeAudio: null,
   waveform: new Float32Array(256),
@@ -101,6 +129,7 @@ function setObStep(n) {
 els.obStartButton.addEventListener("click", () => {
   setObStep(1);
   loadModelStatus();
+  loadDiskInfo();
 });
 
 els.obSkipModelsButton.addEventListener("click", () => {
@@ -162,14 +191,30 @@ function renderObModels(models) {
     const done = state && state.status === "downloaded";
     const downloading = state && state.status === "downloading";
     const failed = state && state.status === "failed";
+    const cancelled = state && state.status === "cancelled";
     const pct = state ? state.progress_pct : 0;
     let pctText = "-";
     if (done) pctText = "✓";
-    else if (downloading) pctText = `${Math.round(pct)}%`;
+    else if (downloading) {
+      const doneBytes = state ? state.downloaded_bytes : 0;
+      const totalBytes = state ? state.total_bytes : 0;
+      pctText = totalBytes > 0 ? `${doneBytes}/${totalBytes}` : "...";
+    }
     else if (failed) pctText = "✗";
+    else if (cancelled) pctText = "已取消";
+
+    // Auto-select downloadable models on first load
+    if (!done && !downloading && !_modelsInitialized) {
+      selectedModels.add(spec.key);
+    }
+    const checked = selectedModels.has(spec.key) ? "checked" : "";
+
     return `
-      <div class="obModelItem">
-        <div class="obModelCheck ${done ? "done" : ""} ${downloading ? "downloading" : ""}">${done ? "✓" : ""}</div>
+      <div class="obModelItem ${done ? "done" : ""} ${downloading ? "downloading" : ""}">
+        <label class="obModelCheckWrap">
+          <input type="checkbox" class="obModelCb" data-key="${spec.key}" ${checked} ${done ? "disabled" : ""} ${downloading ? "disabled" : ""}>
+          <span class="obModelCheckbox"></span>
+        </label>
         <div class="obModelInfo">
           <div class="obModelName">${spec.name}</div>
           <div class="obModelSize">${spec.size}</div>
@@ -178,37 +223,77 @@ function renderObModels(models) {
         <div class="obModelPct">${pctText}</div>
       </div>`;
   }).join("");
+
+  _modelsInitialized = true;
+  // Bind checkbox events
+  document.querySelectorAll(".obModelCb").forEach(cb => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) selectedModels.add(cb.dataset.key);
+      else selectedModels.delete(cb.dataset.key);
+      updateDownloadButton(Object.values(modelStates));
+    });
+  });
 }
 
 function updateDownloadButton(models) {
   if (!models.length) {
-    els.obDownloadButton.textContent = `一键下载 (~${totalModelSize()})`;
+    els.obDownloadButton.textContent = `下载选中 (~${selectedModelSize()})`;
     els.obDownloadButton.disabled = false;
+    els.obDownloadButton.classList.remove("danger");
     return;
   }
   const allReady = models.every(m => m.status === "downloaded");
   const hasDownloading = models.some(m => m.status === "downloading");
+  const selectedKeys = getSelectedKeys(models);
   if (allReady) {
     els.obDownloadButton.textContent = "✓ 全部就绪";
     els.obDownloadButton.disabled = true;
+    els.obDownloadButton.classList.remove("danger");
   } else if (hasDownloading) {
-    els.obDownloadButton.textContent = "下载中...";
-    els.obDownloadButton.disabled = true;
-  } else {
-    els.obDownloadButton.textContent = `一键下载 (~${totalModelSize()})`;
+    els.obDownloadButton.textContent = "✕ 取消下载";
     els.obDownloadButton.disabled = false;
+    els.obDownloadButton.classList.add("danger");
+  } else {
+    const size = selectedModelSize();
+    const hasSel = selectedKeys.length > 0;
+    els.obDownloadButton.textContent = hasSel ? `下载选中 (~${size})` : "请勾选模型";
+    els.obDownloadButton.disabled = !hasSel;
+    els.obDownloadButton.classList.remove("danger");
   }
 }
 
 els.obDownloadButton.addEventListener("click", async () => {
   const base = defaultApiBase();
+  const isDownloading = els.obDownloadButton.classList.contains("danger");
+
+  if (isDownloading) {
+    // Cancel all downloads
+    els.obDownloadButton.disabled = true;
+    els.obDownloadButton.textContent = "取消中...";
+    try {
+      await fetch(`${base}/v1/models/download`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+    } catch (_) {}
+    // Force refresh and reset button state
+    els.obDownloadButton.classList.remove("danger");
+    await loadModelStatus();
+    return;
+  }
+
+  // Start download of selected models
   els.obDownloadButton.disabled = true;
   els.obDownloadButton.textContent = "启动中...";
   try {
+    const keys = getSelectedKeys(Object.values(modelStates));
+    const payload = { keys: keys };
+    if (modelRoot) payload.target_dir = modelRoot;
     await fetch(`${base}/v1/models/download`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(payload),
     });
     loadModelStatus();
   } catch (err) {
@@ -263,6 +348,42 @@ els.settingsDownloadButton.addEventListener("click", async () => {
 });
 
 // ============================
+
+async function loadDiskInfo() {
+  const base = defaultApiBase();
+  try {
+    const resp = await fetch(`${base}/system/disk`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!modelRoot) modelRoot = data.recommended;
+
+    // Show in the onboarding page
+    const container = document.querySelector("#obDiskInfo");
+    if (!container) return;
+    container.innerHTML = data.candidates.map(c => {
+      const cls = c.path === modelRoot ? "selected" : "";
+      const color = c.free_gb < 0.5 ? "var(--danger)" : c.free_gb < 2 ? "var(--warn, #f0a020)" : "var(--ok)";
+      return `<div class="obDiskRow ${cls}" data-path="${c.path}">
+        <span class="obDiskRadio"></span>
+        <span class="obDiskPath">${c.path}</span>
+        <span class="obDiskSpace">${c.free_gb} GB 可用 / ${c.total_gb} GB</span>
+      </div>`;
+    }).join("");
+
+    // Click handlers
+    container.querySelectorAll(".obDiskRow").forEach(row => {
+      row.addEventListener("click", () => {
+        modelRoot = row.dataset.path;
+        container.querySelectorAll(".obDiskRow").forEach(r => r.classList.remove("selected"));
+        row.classList.add("selected");
+      });
+    });
+  } catch (_) {
+    const container = document.querySelector("#obDiskInfo");
+    if (container) container.innerHTML = '<div class="obDiskRow" style="color:var(--danger);justify-content:center">无法获取磁盘信息 — 检查后端连接</div>';
+  }
+}
+
 //  TRANSITION TO CHAT
 // ============================
 
@@ -300,7 +421,7 @@ function defaultApiBase() {
   }
   const saved = localStorage.getItem("her.apiBase");
   if (saved) return saved;
-  if (location.port === "7860") return `${location.protocol}//${location.hostname}:8080`;
+  if (location.port === "7860") return `${location.protocol}//${location.hostname}:8000`;
   return location.origin;
 }
 
@@ -317,9 +438,10 @@ function fillSelect(select, values, preferred) {
 function initControls() {
   els.apiBase.value = defaultApiBase();
   els.sessionId.value = localStorage.getItem("her.sessionId") || "demo-session";
-  fillSelect(els.asrProvider, DEFAULTS.asr, "ax_asr");
+  els.llmApiKey.value = localStorage.getItem("her.llmApiKey") || "";
+  fillSelect(els.asrProvider, DEFAULTS.asr, "sensevoice");
   fillSelect(els.llmProvider, DEFAULTS.llm, "deepseek");
-  fillSelect(els.ttsProvider, DEFAULTS.tts, "ax_tts");
+  fillSelect(els.ttsProvider, DEFAULTS.tts, "edge_tts");
   fillSelect(els.voice, DEFAULTS.voices, "af_heart");
 }
 
@@ -396,7 +518,7 @@ function options() {
 
 function openSocket() {
   if (state.socket && state.socket.readyState === WebSocket.OPEN) return state.socket;
-  const wsUrl = `${wsBase(defaultApiBase())}/v1/ws/dialogue`;
+  const wsUrl = `${wsBase(defaultApiBase())}/v1/dialogue/ws`;
   const socket = new WebSocket(wsUrl);
   state.socket = socket;
   socket.addEventListener("open", () => setConnection("已连接", "online"));
@@ -405,7 +527,9 @@ function openSocket() {
   socket.addEventListener("message", (event) => {
     try {
       handleMessage(JSON.parse(event.data));
-    } catch (_) {}
+    } catch (e) {
+      console.error("WS msg handler error:", e, "raw:", event.data?.substring(0, 200));
+    }
   });
   return socket;
 }
@@ -417,20 +541,35 @@ function sendWhenOpen(socket, msg) {
 
 function handleMessage(msg) {
   switch (msg.type) {
-    case "asr_result":
+    case "accepted":
+      if (msg.turn_id) state.currentTurnId = msg.turn_id;
+      break;
+    case "user_text":
+      if (!state.assistantNode) appendAssistant("");
+      break;
+    case "asr_started":
+      setStatus("识别中");
+      break;
+    case "asr":
       els.asrMetric.textContent = `${msg.asr_ms ?? "?"} ms`;
-      if (msg.text && !state.assistantNode) appendAssistant(msg.text);
+      if (msg.text) {
+        addMessage("user", msg.text);
+        if (!state.assistantNode) appendAssistant("");
+      }
+      break;
+    case "llm_started":
+      setStatus("思考中");
       break;
     case "llm_delta":
+      state.streamingReceived = true;
       els.llmMetric.textContent = `${msg.llm_ms ?? "?"} ms`;
       appendAssistant(msg.text || "");
       break;
-    case "llm_done":
+    case "llm":
       els.llmMetric.textContent = `${msg.llm_ms ?? "?"} ms`;
-      state.assistantNode = null;
-      setStatus("播报中");
+      if (msg.text && !state.streamingReceived) appendAssistant(msg.text);
       break;
-    case "tts_segment":
+    case "tts_sentence":
       state.ttsCount++;
       state.ttsMs += msg.tts_ms || 0;
       els.ttsMetric.textContent = `${state.ttsMs} ms`;
@@ -439,16 +578,26 @@ function handleMessage(msg) {
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         state.audioQueue.push(new Blob([bytes], { type: msg.audio_format === "mp3" ? "audio/mpeg" : "audio/wav" }));
+        state.currentResponseAudio.push(new Blob([bytes], { type: msg.audio_format === "mp3" ? "audio/mpeg" : "audio/wav" }));
         if (!state.audioPlaying) playNextAudio();
       }
       break;
-    case "turn_complete":
+    case "done":
+      console.log("DONE event, audio blobs:", state.currentResponseAudio.length, "assistantNode:", !!state.assistantNode);
       els.totalMetric.textContent = `${msg.total_ms ?? "?"} ms`;
       setConnection("待机");
+      state.lastAssistantNode = state.assistantNode;
+      state.assistantNode = null;
+      if (state.lastAssistantNode && state.currentResponseAudio.length > 0) {
+        attachReplayAudioTo(state.lastAssistantNode, state.currentResponseAudio.slice());
+        state.lastAssistantNode = null;
+      }
+      state.currentResponseAudio = [];
+      state.streamingReceived = false;
       setStatus("待机");
       break;
     case "error":
-      addEvent("error", msg.message || "未知错误");
+      addEvent("error", msg.message || msg.error?.message || "未知错误");
       setStatus("错误");
       break;
   }
@@ -473,8 +622,42 @@ function playNextAudio() {
 function stopAudio() {
   state.audioQueue = [];
   if (state.activeAudio) { state.activeAudio.pause(); state.activeAudio.currentTime = 0; }
-  state.audioPlaying = false;
+  state.audioPlaying = false; state.lastAssistantNode = null;
   setStatus("播报已停止");
+}
+
+function attachReplayAudioTo(node, blobs) {
+  console.log("attachReplayAudioTo: node=", node.tagName, "blobs=", blobs.length);
+  if (!node || !blobs || blobs.length === 0) return;
+  const btn = node.querySelector(".replayBtn");
+  console.log("replayBtn found:", !!btn);
+  if (!btn) return;
+  btn.classList.add("ready");
+  btn._audioBlobs = blobs;
+  btn._audioIndex = 0;
+  btn._audioUrl = null;
+}
+
+function replayAssistantAudio(btn) {
+  const blobs = btn._audioBlobs;
+  if (!blobs || blobs.length === 0) return;
+  btn._audioIndex = 0;
+  playReplayQueue(btn, blobs);
+}
+
+function playReplayQueue(btn, blobs) {
+  if (btn._audioUrl) { URL.revokeObjectURL(btn._audioUrl); btn._audioUrl = null; }
+  if (btn._audioIndex >= blobs.length) { btn.textContent = "▶ 回听"; return; }
+  const blob = blobs[btn._audioIndex];
+  btn._audioUrl = URL.createObjectURL(blob);
+  btn.textContent = "⏸ 暂停";
+  const audio = new Audio(btn._audioUrl);
+  btn._replayAudio = audio;
+  audio.addEventListener("ended", () => {
+    btn._audioIndex++;
+    playReplayQueue(btn, blobs);
+  });
+  audio.play().catch(() => { btn.textContent = "▶ 回听"; });
 }
 
 // ============================
@@ -497,7 +680,7 @@ function pcm16ToBase64(pcm) {
 }
 
 async function startRecording() {
-  stopAudio();
+  stopAudio(); state.currentResponseAudio = []; state.lastAssistantNode = null; state.streamingReceived = false;
   resetMetrics();
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -543,7 +726,7 @@ function stopRecording() {
 function sendText() {
   const text = els.textInput.value.trim();
   if (!text) return;
-  stopAudio();
+  stopAudio(); state.currentResponseAudio = []; state.lastAssistantNode = null; state.streamingReceived = false;
   resetMetrics();
   addMessage("user", text);
   els.textInput.value = "";
@@ -586,6 +769,19 @@ els.recordButton.addEventListener("click", () => {
   else startRecording().catch(err => { setConnection("麦克风错误", "error"); setStatus(err.message); });
 });
 els.stopAudioButton.addEventListener("click", stopAudio);
+els.llmApiKey.addEventListener("input", () => localStorage.setItem("her.llmApiKey", els.llmApiKey.value.trim()));
+
+els.conversation.addEventListener("click", (e) => {
+  const btn = e.target.closest(".replayBtn");
+  if (!btn) return;
+  const audio = btn._replayAudio;
+  if (audio && !audio.paused) {
+    audio.pause();
+    btn.textContent = "▶ 回听";
+  } else {
+    replayAssistantAudio(btn);
+  }
+});
 els.apiBase.addEventListener("change", () => {
   localStorage.setItem("her.apiBase", els.apiBase.value.trim());
   loadProviders();
@@ -607,5 +803,5 @@ els.sessionId.addEventListener("change", () => {
       els.obConnectionDot.className = "obConnDot online";
     }
   } catch (_) {}
-  els.obDownloadButton.textContent = `一键下载 (~${totalModelSize()})`;
+  els.obDownloadButton.textContent = `下载选中 (~${selectedModelSize()})`;
 })();
