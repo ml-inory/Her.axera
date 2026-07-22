@@ -349,6 +349,11 @@ class SenseVoiceProvider:
                 continue
             if set(line) <= {"-", "=", "*"}:
                 continue
+            # Skip lines that look like Python dicts or debug output
+            if line.startswith("{") and line.endswith("}"):
+                continue
+            if line.startswith("[INFO]") or line.startswith("[WARN]"):
+                continue
             return line.strip().strip('"\'')
         return ""
 

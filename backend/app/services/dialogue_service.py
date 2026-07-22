@@ -22,7 +22,21 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYSTEM_PROMPT = "你是一个简洁、友好的语音助手。优先用简短自然的中文回答。"
 
 _SENTENCE_END_RE = re.compile(r"[。！？!?；;\n]")
+_CLAUSE_END_RE = re.compile(r"[，,、：:]")
 _EMOTION_RE = re.compile(r"^\[emotion:(\w+)\]\s*")
+
+_CLEAN_FOR_TTS_RE = re.compile(r"[\*_~`#>\-|=]|\[.*?\]|\{.*?\}|<[^>]+>|https?://\S+|\b\w+\|\w+\b|\(https?://\S+\)")
+_EMOJI_RE = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B50\u2764\uFE0F]+")
+
+
+def _clean_for_tts(text: str) -> str:
+    """Remove emoji, markdown formatting, and non-speakable tokens for TTS."""
+    text = _EMOJI_RE.sub("", text)
+    text = _CLEAN_FOR_TTS_RE.sub("", text)
+    # Collapse multiple spaces
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 EMOTION_PROMPT_SUFFIX = "\n\n在每次回复开头用 [emotion:XXX] 标签表示你的情绪状态。可选值：happy, sad, surprised, angry, neutral, thinking。标签后直接跟回复正文。"
 
 STREAMING_CHUNK_MIN = 4
@@ -173,7 +187,7 @@ class DialogueService:
                 tts_response = await tts_service.synthesize(
                     trace_id,
                     SpeechRequest(
-                        text=sentence,
+                        text=_clean_for_tts(sentence),
                         provider=tts_provider,
                         model=tts_model,
                         voice=voice,
@@ -225,7 +239,7 @@ class DialogueService:
                 tts_response = await tts_service.synthesize(
                     trace_id,
                     SpeechRequest(
-                        text=sentence,
+                        text=_clean_for_tts(sentence),
                         provider=tts_provider,
                         model=tts_model,
                         voice=voice,

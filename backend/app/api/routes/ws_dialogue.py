@@ -312,18 +312,22 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     }
                 )
             except Exception as exc:  # noqa: BLE001
-                await send_event(
-                    {
-                        "type": "error",
-                        "trace_id": trace_id,
-                        "error": {
-                            "code": "pipeline_failed",
-                            "message": str(exc),
-                            "stage": "dialogue",
-                            "retryable": True,
-                        },
-                    }
-                )
+                logger.exception("Pipeline failed for turn %s", turn_id if 'turn_id' in dir() else 'unknown')
+                try:
+                    await send_event(
+                        {
+                            "type": "error",
+                            "trace_id": trace_id,
+                            "error": {
+                                "code": "pipeline_failed",
+                                "message": str(exc)[:300],
+                                "stage": "dialogue",
+                                "retryable": True,
+                            },
+                        }
+                    )
+                except Exception:
+                    logger.warning("Could not send error event (websocket likely closed)")
     except WebSocketDisconnect:
         if state.active_task and not state.active_task.done():
             state.active_task.cancel()
