@@ -76,6 +76,45 @@ class AXASRProvider:
             "model_path": self.settings.ax_asr_model_path,
         }
 
+    # ── Streaming ASR ──────────────────────────────────────────
+
+    def stream_init(self) -> None:
+        """Initialize streaming ASR session. Call once per utterance."""
+        asr = self.asr
+        if hasattr(asr, 'stream_init'):
+            asr.stream_init()
+
+    def stream_feed(self, pcm: bytes, sample_rate: int = 16000) -> str | None:
+        """Feed a PCM chunk and return partial result if changed."""
+        import numpy as np
+        asr = self.asr
+        if not hasattr(asr, 'stream_feed'):
+            return None
+        n_samples = len(pcm) // 2
+        if n_samples == 0:
+            return None
+        audio = np.frombuffer(pcm[:n_samples * 2], dtype=np.int16).astype(np.float32) / 32768.0
+        asr.stream_feed(audio, sample_rate)
+        result = asr.stream_result() if hasattr(asr, 'stream_result') else None
+        return result if result else None
+
+    def stream_result(self) -> str:
+        """Get current partial streaming result."""
+        asr = self.asr
+        if hasattr(asr, 'stream_result'):
+            return asr.stream_result() or ""
+        return ""
+
+    def stream_reset(self) -> None:
+        """Reset streaming state for a new utterance."""
+        asr = self.asr
+        if hasattr(asr, 'stream_reset'):
+            asr.stream_reset()
+
+    # ── Internal ───────────────────────────────────────────────
+
+    @property
+
     @property
     def asr(self):
         if self._asr is None:

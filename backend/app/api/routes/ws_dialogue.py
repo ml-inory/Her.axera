@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.tracing import new_trace_id
 from app.services.asr_service import asr_service
+from app.services.asr_service import asr_service
 from app.services.dialogue_service import dialogue_service
 from app.services.wakeword_service import wakeword_service
 
@@ -246,6 +247,11 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     state.free_talk_silence_frames = 0
                     state.free_talk_options = dict(request.get("options") or request)
                     await cancel_active("free_talk")
+                                        # Initialize streaming ASR for real-time partial results
+                    try:
+                        asr_service.ax_asr_provider.stream_init()
+                    except Exception:
+                        pass  # streaming not available, fall back to batch mode
                     await send_event({
                         "type": "free_talk_started",
                         "trace_id": trace_id,
@@ -290,6 +296,20 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                         chunk_data = b64decode(str(request.get("audio_base64") or ""), validate=True)
                         state.free_talk_buffer.extend(chunk_data)
 
+                        # Streaming ASR: feed chunk for real-time partial results
+                        try:
+                            partial = asr_service.ax_asr_provider.stream_feed(chunk_data, input_sr)
+                            if partial:
+                                options = state.free_talk_options
+                                await send_event({
+                                    "type": "asr_partial",
+                                    "trace_id": trace_id,
+                                    "text": partial,
+                                    "turn_id": "streaming",
+                                })
+                        except Exception:
+                            pass  # streaming not available
+
                         energy = _rms_energy(chunk_data)
                         if energy >= BARGEIN_ENERGY_THRESHOLD:
                             state.free_talk_speech_frames += 1
@@ -323,6 +343,11 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                                 )
 
                                 # Reset buffer for next utterance
+                                # Reset streaming ASR for next utterance
+                                try:
+                                    asr_service.ax_asr_provider.stream_reset()
+                                except Exception:
+                                    pass
                                 state.free_talk_buffer = bytearray()
                                 state.free_talk_speech_frames = 0
                                 state.free_talk_silence_frames = 0
