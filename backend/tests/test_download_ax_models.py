@@ -13,7 +13,7 @@ SPEC.loader.exec_module(download_ax_models)
 
 
 def test_resolve_models_deduplicates_aliases() -> None:
-    selected = download_ax_models.resolve_models(["speaker", "3d_speaker", "whisper"])
+    selected = download_ax_models.resolve_models(["speaker", "3d_speaker", "speaker"])
     assert [spec.key for spec in selected] == ["speaker", "3d_speaker"]
 
 

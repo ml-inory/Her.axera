@@ -28,8 +28,7 @@ class AXASRProvider:
         return ProviderInfo(
             name=self.name,
             type="local",
-            models=["ax_asr_sensevoice", "ax_asr_whisper_tiny", "ax_asr_whisper_base",
-                    "ax_asr_whisper_small", "ax_asr_whisper_turbo"],
+            models=["ax_asr_sensevoice"],
             languages=["zh", "en", "yue", "ja", "ko", "auto"],
             audio_formats=["wav", "mp3"],
             features=["axengine", "local_model", "ax_asr_api"],

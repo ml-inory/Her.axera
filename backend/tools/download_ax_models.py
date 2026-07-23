@@ -30,17 +30,6 @@ class ModelSpec:
 
 MODEL_SPECS: tuple[ModelSpec, ...] = (
     ModelSpec(
-        key="whisper",
-        repo_id="AXERA-TECH/Whisper",
-        local_dir="Whisper",
-        aliases=("whisper", "asr-whisper", "whisper-tiny"),
-        env=(
-            ("AX_ASR_MODEL_TYPE", "whisper_tiny"),
-            ("AX_ASR_MODEL_PATH", "{path}"),
-        ),
-        model_type="asr",
-    ),
-    ModelSpec(
         key="speaker",
         repo_id="AXERA-TECH/3D-Speaker-MT.Axera",
         local_dir="3D-Speaker-MT.Axera",
@@ -144,7 +133,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "models",
         nargs="*",
-        help="Models to download: all, whisper, speaker.",
+        help="Models to download: all, speaker.",
     )
     parser.add_argument(
         "--root",

@@ -51,14 +51,6 @@ logger = logging.getLogger("her_axera_sdk")
 # ---------------------------------------------------------------------------
 
 _ASR_MODELS = [
-    ModelSpec(
-        key="asr_whisper_tiny",
-        name="Whisper Tiny",
-        repo_id="AXERA-TECH/Whisper",
-        allow_patterns=["models-ax650/*"],
-        required_files=["whisper/whisper_encoder_tiny.axmodel"],
-        size_hint="~80 MB",
-    ),
 ]
 
 _TTS_MODELS: list[ModelSpec] = []
@@ -86,7 +78,7 @@ class HerAxeraSDK:
         Model name sent to the LLM API. Defaults to ``deepseek-chat``.
     asr_model_type:
         ASR model type passed to ``ax_asr.AX_ASR``. One of ``sensevoice``,
-        ``whisper_tiny``, ``whisper_base``, ``whisper_small``, ``whisper_turbo``.
+        ``sensevoice``.
     tts_type:
         TTS engine type passed to ``ax_tts.AX_TTS``. Default ``KOKORO``.
     tts_voice:

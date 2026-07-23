@@ -86,26 +86,6 @@ def _build_model_specs() -> dict[str, ModelDownloadSpec]:
 
 
 
-    # ---- ASR: Whisper Tiny (ModelScope) ----
-    specs["asr_whisper_tiny"] = ModelDownloadSpec(
-        key="asr_whisper_tiny",
-        display_name="Whisper Tiny (AX650)",
-        repo_id="AXERA-TECH/Whisper",
-        source="modelscope",
-        allow_patterns=["models-ax650/tiny/*"],
-        ignore_patterns=["models-ax650/tiny/*tokens*", "models-ax650/tiny/*config*"],
-        strip_prefix="models-ax650/tiny",
-        rename_map={
-            "tiny-encoder.axmodel": "whisper_encoder_tiny.axmodel",
-            "tiny-decoder.axmodel": "whisper_decoder_tiny.axmodel",
-        },
-        local_dir=str(asr_root / "whisper"),
-        required_files=[
-            str(asr_root / "whisper" / "whisper_encoder_tiny.axmodel"),
-            str(asr_root / "whisper" / "whisper_decoder_tiny.axmodel"),
-        ],
-        model_type="asr",
-    ),
 
     return specs
 
