@@ -2,8 +2,6 @@ from base64 import b64encode
 from io import BytesIO
 import math
 from pathlib import Path
-import shlex
-import subprocess
 import tempfile
 import wave
 from datetime import datetime
@@ -104,36 +102,7 @@ class TTSService:
                 features=["speed", "pitch", "volume"],
                 metadata={"requires_api_key": False},
             ),
-            "kokoro": ProviderInfo(
-                name="kokoro",
-                type="local",
-                models=["kokoro.axera"],
-                languages=["zh-CN", "en-US", "ja-JP"],
-                audio_formats=["wav", "pcm"],
-                features=["axengine", "local_model", "voice", "speed"],
-                metadata={
-                    "source_repo": "https://huggingface.co/AXERA-TECH/kokoro.axera",
-                    "repo_path": self.settings.kokoro_repo_path,
-                    "model_dir": self.settings.kokoro_model_dir,
-                    "command_env": "KOKORO_COMMAND",
-                    "enabled": self._should_enable_kokoro(),
-                },
-            ),
-            "zipvoice": ProviderInfo(
-                name="zipvoice",
-                type="local",
-                models=["zipvoice.axera"],
-                languages=["zh-CN", "en-US"],
-                audio_formats=["wav", "pcm"],
-                features=["axengine", "local_model", "voice_clone", "speed"],
-                metadata={
-                    "source_repo": "https://huggingface.co/AXERA-TECH/ZipVoice.AXERA",
-                    "repo_path": self.settings.zipvoice_repo_path,
-                    "model_dir": self.settings.zipvoice_model_dir,
-                    "command_env": "ZIPVOICE_COMMAND",
-                    "enabled": self._should_enable_zipvoice(),
-                },
-            ),
+
             "ax_tts": ProviderInfo(
                 name="ax_tts",
                 type="local",
@@ -258,8 +227,7 @@ class TTSService:
             return self._synthesize_mock_tts(trace_id, request, selected_model, selected_voice, start)
         if provider_name == "edge_tts":
             return await self._synthesize_edge_tts(trace_id, request, selected_model, selected_voice, start)
-        if provider_name in {"kokoro", "zipvoice"}:
-            return self._synthesize_axera_tts(trace_id, request, provider_name, selected_model, selected_voice, start)
+
         if provider_name == "ax_tts":
             return await self._synthesize_ax_tts(trace_id, request, selected_model, selected_voice, start)
 
@@ -289,11 +257,6 @@ class TTSService:
             cache_hit=False,
         )
 
-    def _should_enable_kokoro(self) -> bool:
-        return bool(self.settings.enable_kokoro_tts or self.settings.kokoro_repo_path or self.settings.kokoro_command)
-
-    def _should_enable_zipvoice(self) -> bool:
-        return bool(self.settings.enable_zipvoice_tts or self.settings.zipvoice_repo_path or self.settings.zipvoice_command)
 
     def _should_enable_ax_tts(self) -> bool:
         return bool(self.settings.enable_ax_tts)
@@ -464,172 +427,6 @@ class TTSService:
             processing_ms=int((perf_counter() - start) * 1000),
             cache_hit=False,
         )
-
-    def _synthesize_axera_tts(
-        self,
-        trace_id: str,
-        request: SpeechRequest,
-        provider_name: str,
-        selected_model: str,
-        selected_voice: str,
-        start: float,
-    ) -> SpeechResponse:
-        config = self._axera_tts_config(provider_name)
-        output_path = Path(tempfile.gettempdir()) / f"her_{provider_name}_{uuid4().hex}.{request.audio_format}"
-        command = self._build_axera_tts_command(
-            config=config,
-            request=request,
-            provider_name=provider_name,
-            selected_model=selected_model,
-            selected_voice=selected_voice,
-            output_path=output_path,
-        )
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=config["repo_path"] or None,
-                capture_output=True,
-                text=True,
-                timeout=int(config["timeout_sec"]),
-                check=False,
-            )
-            if completed.returncode != 0:
-                output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
-                raise AppError(
-                    f"{provider_name}_provider_error",
-                    f"{provider_name} exited with code {completed.returncode}: {output[-1200:]}",
-                    status_code=502,
-                    stage="tts",
-                    retryable=True,
-                )
-            if not output_path.exists() or output_path.stat().st_size == 0:
-                raise AppError(
-                    f"{provider_name}_empty_audio",
-                    f"{provider_name} completed but did not create output audio: {output_path}",
-                    status_code=502,
-                    stage="tts",
-                    retryable=True,
-                )
-            audio_content = output_path.read_bytes()
-        except AppError:
-            raise
-        except subprocess.TimeoutExpired as exc:
-            raise AppError(
-                f"{provider_name}_timeout",
-                f"{provider_name} synthesis timed out after {config['timeout_sec']}s",
-                status_code=504,
-                stage="tts",
-                retryable=True,
-            ) from exc
-        except OSError as exc:
-            raise AppError(
-                f"{provider_name}_invocation_failed",
-                f"Failed to execute {provider_name} command: {exc}",
-                status_code=503,
-                stage="tts",
-                retryable=True,
-            ) from exc
-        finally:
-            output_path.unlink(missing_ok=True)
-
-        duration_ms = max(300, len(request.text) * 120)
-        return SpeechResponse(
-            trace_id=trace_id,
-            provider=provider_name,
-            model=selected_model,
-            voice=selected_voice,
-            language=request.language,
-            audio_url=None,
-            audio_base64=b64encode(audio_content).decode("ascii") if request.return_audio_base64 else None,
-            audio_format=request.audio_format,
-            sample_rate=request.sample_rate,
-            duration_ms=duration_ms,
-            processing_ms=int((perf_counter() - start) * 1000),
-            cache_hit=False,
-        )
-
-    def _axera_tts_config(self, provider_name: str) -> dict[str, str | int | None]:
-        if provider_name == "kokoro":
-            return {
-                "python": self.settings.kokoro_python,
-                "repo_path": self.settings.kokoro_repo_path,
-                "model_dir": self.settings.kokoro_model_dir,
-                "command": self.settings.kokoro_command,
-                "timeout_sec": self.settings.kokoro_timeout_sec,
-            }
-        return {
-            "python": self.settings.zipvoice_python,
-            "repo_path": self.settings.zipvoice_repo_path,
-            "model_dir": self.settings.zipvoice_model_dir,
-            "command": self.settings.zipvoice_command,
-            "timeout_sec": self.settings.zipvoice_timeout_sec,
-        }
-
-    def _build_axera_tts_command(
-        self,
-        *,
-        config: dict[str, str | int | None],
-        request: SpeechRequest,
-        provider_name: str,
-        selected_model: str,
-        selected_voice: str,
-        output_path: Path,
-    ) -> list[str]:
-        repo_path = str(config["repo_path"] or "")
-        values = {
-            "python": str(config["python"] or "python3"),
-            "repo_path": repo_path,
-            "model_dir": str(config["model_dir"] or ""),
-            "model": selected_model,
-            "text": request.text,
-            "output_path": str(output_path),
-            "voice": selected_voice,
-            "language": request.language,
-            "sample_rate": str(request.sample_rate),
-            "audio_format": request.audio_format,
-            "speed": str(request.speed),
-        }
-        command_template = str(config["command"] or "")
-        if command_template:
-            return shlex.split(command_template.format(**values))
-
-        if not repo_path:
-            raise AppError(
-                f"{provider_name}_not_configured",
-                f"{provider_name} requires {provider_name.upper()}_COMMAND or {provider_name.upper()}_REPO_PATH",
-                status_code=503,
-                stage="tts",
-                retryable=True,
-            )
-        repo = Path(repo_path).expanduser().resolve()
-        candidates = [repo / "python" / "main.py", repo / "main.py", repo / "demo.py"]
-        script_path = next((candidate for candidate in candidates if candidate.exists()), None)
-        if script_path is None:
-            raise AppError(
-                f"{provider_name}_repo_invalid",
-                f"No default entrypoint was found under {repo}; set {provider_name.upper()}_COMMAND",
-                status_code=503,
-                stage="tts",
-                retryable=True,
-            )
-
-        command = [
-            str(config["python"] or "python3"),
-            str(script_path),
-            "--text",
-            request.text,
-            "--output",
-            str(output_path),
-            "--voice",
-            selected_voice,
-            "--language",
-            request.language,
-            "--sample-rate",
-            str(request.sample_rate),
-        ]
-        if config["model_dir"]:
-            command.extend(["--model-dir", str(config["model_dir"])])
-        return command
 
     def synthesize_segments(self, trace_id: str, request: SegmentedSpeechRequest) -> SegmentedSpeechResponse:
         start = perf_counter()

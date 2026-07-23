@@ -13,13 +13,13 @@ SPEC.loader.exec_module(download_ax_models)
 
 
 def test_resolve_models_deduplicates_aliases() -> None:
-    selected = download_ax_models.resolve_models(["speaker", "3d_speaker", "kokoro"])
-    assert [spec.key for spec in selected] == ["speaker", "kokoro"]
+    selected = download_ax_models.resolve_models(["speaker", "3d_speaker", "whisper"])
+    assert [spec.key for spec in selected] == ["speaker", "3d_speaker"]
 
 
 def test_render_env_uses_hf_mirror_and_model_paths() -> None:
     root = Path("/opt/models/her-axera")
-    selected = download_ax_models.resolve_models(["speaker", "sensevoice"])
+    selected = download_ax_models.resolve_models(["speaker", "3d_speaker"])
     env_text = download_ax_models.render_env(selected, root, "https://hf-mirror.com")
     assert "HF_ENDPOINT=https://hf-mirror.com" in env_text
     assert "SPEAKER_REPO_PATH=/opt/models/her-axera/3D-Speaker-MT.Axera" in env_text

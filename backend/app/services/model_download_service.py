@@ -84,25 +84,7 @@ def _build_model_specs() -> dict[str, ModelDownloadSpec]:
 
     specs: dict[str, ModelDownloadSpec] = {}
 
-    # ---- ASR: SenseVoice (ModelScope) ----
-    sensevoice_files = [
-        "sensevoice.axmodel",
-        "streaming_sensevoice.axmodel",
-        "am.mvn",
-        "chn_jpn_yue_eng_ko_spectok.bpe.model",
-        "tokens.txt",
-    ]
-    specs["asr_sensevoice"] = ModelDownloadSpec(
-        key="asr_sensevoice",
-        display_name="SenseVoice ASR (AX650)",
-        repo_id="AXERA-TECH/SenseVoice",
-        source="modelscope",
-        allow_patterns=["sensevoice_ax650/sensevoice/*"],
-        strip_prefix="sensevoice_ax650/sensevoice",
-        local_dir=str(asr_root / "sensevoice"),
-        required_files=[str(asr_root / "sensevoice" / f) for f in sensevoice_files],
-        model_type="asr",
-    )
+
 
     # ---- ASR: Whisper Tiny (ModelScope) ----
     specs["asr_whisper_tiny"] = ModelDownloadSpec(
@@ -123,45 +105,7 @@ def _build_model_specs() -> dict[str, ModelDownloadSpec]:
             str(asr_root / "whisper" / "whisper_decoder_tiny.axmodel"),
         ],
         model_type="asr",
-    )
-
-    # ---- TTS: Kokoro model files (ModelScope) ----
-    kokoro_files = [
-        "kokoro_part1_96.axmodel",
-        "kokoro_part2_96.axmodel",
-        "kokoro_part3_96.axmodel",
-        "model4_har_sim.onnx",
-    ]
-    specs["tts_kokoro_model"] = ModelDownloadSpec(
-        key="tts_kokoro_model",
-        display_name="Kokoro TTS Model (AX650)",
-        repo_id="AXERA-TECH/kokoro.axera",
-        source="modelscope",
-        allow_patterns=[
-            "models/kokoro_part1_96.axmodel",
-            "models/kokoro_part2_96.axmodel",
-            "models/kokoro_part3_96.axmodel",
-            "models/model4_har_sim.onnx",
-        ],
-        strip_prefix="models",
-        local_dir=str(tts_root / "kokoro"),
-        required_files=[str(tts_root / "kokoro" / f) for f in kokoro_files],
-        model_type="tts",
-    )
-
-    # ---- TTS: Kokoro voices (ModelScope) ----
-    specs["tts_kokoro_voices"] = ModelDownloadSpec(
-        key="tts_kokoro_voices",
-        display_name="Kokoro TTS Voices",
-        repo_id="AXERA-TECH/kokoro.axera",
-        source="modelscope",
-        allow_patterns=["cpp/voices/*"],
-        strip_prefix="cpp/voices",
-        local_dir=str(tts_root / "kokoro" / "voices"),
-        required_files=[str(tts_root / "kokoro" / "voices" / "af_heart.bin")],
-        depends_on=["tts_kokoro_model"],
-        model_type="tts",
-    )
+    ),
 
     return specs
 
@@ -209,7 +153,7 @@ class ModelDownloadManager:
             self._states = new_states
         new_root = Path(root)
         os.environ["AX_ASR_MODEL_PATH"] = str(new_root / "asr")
-        os.environ["AX_TTS_MODEL_PATH"] = str(new_root / "tts" / "kokoro")
+        os.environ["AX_TTS_MODEL_PATH"] = str(new_root / "tts")
         logger.info("Model root changed to %s", root)
 
     def get_state(self, key: str) -> ModelDownloadState | None:

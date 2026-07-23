@@ -58,6 +58,8 @@ def _infer_llm_provider(model: str, provider: str | None) -> tuple[str | None, s
         return provider, None if model == provider else model
     if model in llm_service.providers:
         return model, None
+    if model.startswith("ax-llm") or model == "ax_llm":
+        return "ax_llm", model
     if model.startswith("deepseek"):
         return "deepseek", model
     if model.startswith("mock"):
@@ -70,12 +72,8 @@ def _infer_asr_provider(model: str, provider: str | None) -> tuple[str | None, s
         return provider, None if model == provider else model
     if model in asr_service.providers:
         return model, None
-    if model.startswith("sensevoice"):
-        return "sensevoice", model
-    if model in {"fireredasr_aed", "fireredasr-aed-ax650n"} or model.startswith("firered"):
-        return "fireredasr_aed", None if model == "fireredasr_aed" else model
-    if model.startswith("wenet"):
-        return "wenet_onnx", model
+    if model.startswith("ax_asr") or model.startswith("ax-asr"):
+        return "ax_asr", model
     if model.startswith("mock") or model in {"whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"}:
         return "mock_asr", model
     return None, model
@@ -86,12 +84,10 @@ def _infer_tts_provider(model: str, provider: str | None) -> tuple[str | None, s
         return provider, None if model == provider else model
     if model in tts_service.providers:
         return model, None
+    if model.startswith("ax_tts") or model.startswith("ax-tts"):
+        return "ax_tts", model
     if model.startswith("edge"):
         return "edge_tts", model
-    if model.startswith("kokoro"):
-        return "kokoro", model
-    if model.startswith("zipvoice"):
-        return "zipvoice", model
     if model.startswith("mock"):
         return "mock_tts", model
     if model in {"tts-1", "tts-1-hd", "gpt-4o-mini-tts"}:

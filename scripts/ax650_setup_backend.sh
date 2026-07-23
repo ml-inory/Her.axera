@@ -21,12 +21,12 @@ Usage: scripts/ax650_setup_backend.sh [options]
 Prepare the AX650 backend runtime without overwriting existing configuration.
 
 Options:
-  --models "sensevoice speaker"  Download selected AXERA model repos.
+  --models "speaker"  Download selected AXERA model repos.
   --models all                   Download all known AXERA model repos.
   --model-root PATH              Model root directory. Default: /opt/models/her-axera
   --hf-endpoint URL              Hugging Face endpoint. Default: https://hf-mirror.com
   --with-wenet-onnx              Install optional WeNet ONNX dependencies.
-  --with-fireredasr-aed          Install optional FireRedASR-AED dependencies.
+  
   --no-venv                      Install into the current Python environment.
   --system-site-packages         Expose board system site-packages to the venv.
   -h, --help                     Show this help.
@@ -159,7 +159,6 @@ if [[ "${INSTALL_WENET}" -eq 1 ]]; then
 fi
 
 if [[ "${INSTALL_FIRERED}" -eq 1 ]]; then
-  python -m pip install -r backend/requirements-fireredasr-aed.txt
 fi
 
 if [[ "${#MODELS[@]}" -gt 0 ]]; then
@@ -172,7 +171,7 @@ if [[ "${#MODELS[@]}" -gt 0 ]]; then
   echo "[models] wrote backend/.env.models"
   echo "[models] review it, then merge selected values into backend/.env"
 else
-  echo "[models] no models requested; pass --models \"sensevoice speaker\" or --models all to download"
+  echo "[models] no models requested; pass --models \"speaker\" or --models all to download"
 fi
 
 echo "[done] AX650 backend setup completed"

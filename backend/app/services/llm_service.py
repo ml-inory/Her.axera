@@ -59,6 +59,15 @@ class LLMService:
                 metadata={"api_base": self.settings.deepseek_api_base, "openai_compatible": True},
             ),
         }
+        if self._should_register_ax_llm():
+            self.providers["ax_llm"] = ProviderInfo(
+                name="ax_llm",
+                type="local",
+                models=[self.settings.ax_llm_model],
+                languages=["zh-CN", "en-US"],
+                features=["chat", "streaming", "json_output"],
+                metadata={"api_base": self.settings.ax_llm_api_base, "openai_compatible": True, "local_npu": True},
+            )
         if self._should_register_openai_compat():
             self.providers["openai_compat"] = ProviderInfo(
                 name="openai_compat",
@@ -72,6 +81,9 @@ class LLMService:
         self._session_meta: dict[str, dict] = {}  # {session_id: {title, created_at, last_active, user_id}}
         self.jobs: dict[str, LLMJobResponse] = {}
         self._load_sessions()
+
+    def _should_register_ax_llm(self) -> bool:
+        return bool(self.settings.enable_ax_llm or self.settings.default_llm_provider == "ax_llm" or self.settings.ax_llm_api_base)
 
     def _should_register_openai_compat(self) -> bool:
         return bool(self.settings.enable_openai_compat or self.settings.openai_compat_api_base)
@@ -210,13 +222,17 @@ class LLMService:
             api_base = self.settings.deepseek_api_base
             api_key = (request.api_key or self.settings.deepseek_api_key or "").strip()
             model = request.model or self.settings.deepseek_model
+        elif provider_name == "ax_llm":
+            api_base = self.settings.ax_llm_api_base
+            api_key = ""  # local ax_llm does not require API key
+            model = request.model or self.settings.ax_llm_model
         elif provider_name == "openai_compat":
             api_base = self.settings.openai_compat_api_base
             api_key = (request.api_key or self.settings.openai_compat_api_key or "").strip()
             model = request.model or self.settings.openai_compat_model
         else:
             raise AppError("provider_not_found", f"Unknown API provider: {provider_name}", status_code=404, stage="llm")
-        if not api_key:
+        if provider_name != "ax_llm" and not api_key:
             raise AppError("missing_api_key", f"{provider_name} API KEY is required", status_code=400, stage="llm")
         return api_base, api_key, model
 
@@ -257,7 +273,7 @@ class LLMService:
         if provider_name == "mock_llm":
             return self._chat_mock(trace_id, request, provider_info.models[0], start)
         selected_model = request.model or provider_info.models[0]
-        if provider_name not in ("deepseek", "openai_compat"):
+        if provider_name not in ("deepseek", "ax_llm", "openai_compat"):
             raise AppError("provider_not_found", f"LLM provider {provider_name} is not configured", status_code=404, stage="llm")
         return self._chat_openai_api(trace_id, request, provider_name, selected_model, start)
 
@@ -433,7 +449,7 @@ class LLMService:
             for token in response.message.content.split("，"):
                 yield token if token.endswith("。") else f"{token}，"
             return
-        if provider_name not in ("deepseek", "openai_compat"):
+        if provider_name not in ("deepseek", "ax_llm", "openai_compat"):
             raise AppError("provider_not_found", f"LLM provider {provider_name} is not configured", status_code=404, stage="llm")
         async for token in self._stream_openai_api(request, provider_name):
             yield token

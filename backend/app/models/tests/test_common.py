@@ -36,7 +36,7 @@ class TestProviderInfo:
 
     def test_full(self) -> None:
         p = ProviderInfo(
-            name="sensevoice", type="local",
+            name="ax_asr", type="local",
             models=["sv-v1"], languages=["zh-CN"],
             audio_formats=["wav"], features=["streaming"],
             metadata={"repo": "hf://..."},
