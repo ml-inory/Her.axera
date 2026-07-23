@@ -9,7 +9,11 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.models.asr import ASRJobResponse, ASRResult, ASRSegment
 from app.models.common import JobCreatedResponse, ProviderInfo
+import logging
+
 from app.services.vad_service import vad_service
+
+logger = logging.getLogger(__name__)
 
 
 class AXASRProvider:
@@ -213,6 +217,8 @@ class ASRService:
         start = perf_counter()
         provider_name = provider or self.settings.default_asr_provider
         provider_info = self.providers.get(provider_name)
+        logger.debug("ASR transcribe: provider=%s model=%s language=%s audio_bytes=%d vad=%s",
+                     provider_name, model, language, len(audio_content), enable_vad)
         if provider_info is None:
             raise AppError(
                 "provider_not_found",
@@ -252,6 +258,8 @@ class ASRService:
         if provider_name == self.ax_asr_provider.name:
             text, metadata = self.ax_asr_provider.transcribe(transcribe_audio, transcribe_filename, selected_language)
             processing_ms = int((perf_counter() - start) * 1000)
+            logger.info("ASR result: provider=%s text_len=%d processing_ms=%d",
+                        provider_name, len(text), processing_ms)
             duration_ms = speech_duration_ms or max(1000, min(len(audio_content) // 16, 60000))
             selected_model = model or str(metadata.get("model_type") or provider_info.models[0])
             selected_language = str(metadata.get("language") or selected_language)

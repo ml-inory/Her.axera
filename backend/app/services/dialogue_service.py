@@ -14,6 +14,7 @@ from app.models.tts import SpeechRequest
 from app.services.asr_service import asr_service
 from app.services.llm_service import llm_service
 from app.services.speaker_service import speaker_service
+from app.core.errors import AppError
 from app.services.tts_service import tts_service
 
 logger = logging.getLogger(__name__)
@@ -184,19 +185,32 @@ class DialogueService:
                     "text": sentence,
                     "index": sentence_index,
                 }
-                tts_response = await tts_service.synthesize(
-                    trace_id,
-                    SpeechRequest(
-                        text=_clean_for_tts(sentence),
-                        provider=tts_provider,
-                        model=tts_model,
-                        voice=voice,
-                        language=selected_language,
-                        audio_format=output_audio_format,
-                        sample_rate=sample_rate,
-                        return_audio_base64=True,
-                    ),
-                )
+                try:
+                    tts_response = await tts_service.synthesize(
+                        trace_id,
+                        SpeechRequest(
+                            text=_clean_for_tts(sentence),
+                            provider=tts_provider,
+                            model=tts_model,
+                            voice=voice,
+                            language=selected_language,
+                            audio_format=output_audio_format,
+                            sample_rate=sample_rate,
+                            return_audio_base64=True,
+                        ),
+                    )
+                except AppError as exc:
+                    logger.error("TTS synthesis failed for sentence #%d: %s", sentence_index, exc.message)
+                    yield {
+                        "type": "error",
+                        "trace_id": trace_id,
+                        "session_id": session_id,
+                        "error": {"code": exc.code, "message": exc.message, "stage": "tts", "retryable": exc.retryable},
+                    }
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("TTS synthesis failed for sentence #%d: %s", sentence_index, exc)
+                    continue
                 audio_b64 = tts_response.audio_base64 or ""
                 audio_fmt = tts_response.audio_format
                 if use_opus and audio_b64:
@@ -206,7 +220,7 @@ class DialogueService:
                         audio_b64 = b64encode(opus_data).decode("ascii")
                         audio_fmt = "opus"
                     except Exception:  # noqa: BLE001
-                        pass  # fallback to original format
+                        logger.debug("Opus conversion failed for sentence #%d, using original format", sentence_index)
                 yield {
                     "type": "tts_sentence",
                     "trace_id": trace_id,

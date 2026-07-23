@@ -2,6 +2,8 @@
 
 ## 1. 目标
 
+> **📋 实现状态**：本文档描述的是**已完成实现**的设计。当前实现使用 `ax_asr`/`ax_tts`/`ax_llm` 等 NPU-native Provider。详见 [README](../README.md) 中的 Provider 表。
+
 ASR API 用于将用户上传的音频转换为文本，为语音对话系统中的 `ASR + LLM + TTS` 级联链路提供语音识别能力。接口采用 RESTful API 设计，支持同步识别、异步识别、多模型选择、识别分段、置信度返回和错误降级。
 
 ## 2. 设计原则

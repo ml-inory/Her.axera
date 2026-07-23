@@ -4,6 +4,8 @@ This runbook keeps the source tree on the development machine and runs the Her.a
 
 ## Development Machine
 
+> **📋 实现状态**：本文档描述的是**已完成实现**的设计。当前实现使用 `ax_asr`/`ax_tts`/`ax_llm` 等 NPU-native Provider。详见 [README](../README.md) 中的 Provider 表。
+
 Export the repository parent directory:
 
 ```bash
@@ -45,7 +47,7 @@ The base backend install includes `silero-vad-axera`. The setup script keeps the
 Optionally download selected models. The downloader uses `huggingface_hub` and defaults to `https://hf-mirror.com`:
 
 ```bash
-scripts/ax650_setup_backend.sh --models "ax_asr kokoro speaker"
+scripts/ax650_setup_backend.sh --models "speaker"
 ```
 
 Start the backend:

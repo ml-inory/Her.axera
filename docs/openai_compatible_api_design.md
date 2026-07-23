@@ -4,6 +4,8 @@
 
 ## 1. 设计目标
 
+> **📋 实现状态**：本文档描述的是**已完成实现**的设计。当前实现使用 `ax_asr`/`ax_tts`/`ax_llm` 等 NPU-native Provider。详见 [README](../README.md) 中的 Provider 表。
+
 - 对齐 OpenAI 常见接口路径和请求/响应结构，降低客户端集成成本。
 - ASR、LLM、TTS 统一放在 `/v1` 下。
 - 兼容标准字段，同时允许通过扩展字段选择本系统 Provider。

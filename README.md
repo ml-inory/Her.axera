@@ -5,16 +5,59 @@
 ## 系统架构
 
 ```text
-┌──────────┐    WebSocket / REST     ┌─────────────────────────────┐
-│ Web UI   │ ◄─────────────────────► │       FastAPI Backend       │
-│ /ui/     │                         │                             │
-└──────────┘                         │  ┌─────┐  ┌─────┐  ┌─────┐ │
-                                     │  │ ASR │→ │ LLM │→ │ TTS │ │
-                                     │  └─────┘  └─────┘  └─────┘ │
-                                     │      ┌───────────┐         │
-                                     │      │  Speaker   │         │
-                                     │      └───────────┘         │
-                                     └─────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                          Client / 二次开发                            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
+│  │ Web UI   │  │ REST API │  │WebSocket │  │  her_axera_sdk (SDK) │ │
+│  │ /ui/     │  │ Client   │  │ Client   │  │  Python API          │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────┬───────────┘ │
+└───────┼──────────────┼─────────────┼───────────────────┼─────────────┘
+        │              │             │                   │
+        ▼              ▼             ▼                   ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│                     FastAPI Backend (:8080)                            │
+│                                                                       │
+│  ┌────────────────── Security ──────────────────┐                     │
+│  │ TokenAuthMiddleware  │  RateLimitMiddleware   │                     │
+│  └──────────────────────────────────────────────┘                     │
+│                                                                       │
+│  ┌────────────── OpenAI-Compatible API ──────────────┐                │
+│  │ /v1/chat/completions                              │                │
+│  │ /v1/audio/transcriptions  /v1/audio/speech        │                │
+│  │ /v1/wakewords  /v1/speakers  /v1/sessions         │                │
+│  └───────────────────────────────────────────────────┘                │
+│                                                                       │
+│  ┌────────────── WebSocket Dialogue ─────────────┐                    │
+│  │ /v1/dialogue/ws  (barge-in + wake word)        │                    │
+│  └────────────────────────────────────────────────┘                    │
+│                                                                       │
+│  ┌───────────────── Pipeline ─────────────────────┐                   │
+│  │                                                 │                   │
+│  │  ┌─────────┐   ┌──────────┐   ┌─────────┐      │                   │
+│  │  │   VAD   │→  │   ASR    │→  │   LLM   │→ ... │                   │
+│  │  │(Silero) │   │(ax_asr)  │   │(ax_llm) │      │                   │
+│  │  └─────────┘   └──────────┘   └────┬────┘      │                   │
+│  │                    ┌───────────────┘            │                   │
+│  │                    ▼                            │                   │
+│  │  ┌─────────┐   ┌──────────┐                    │                   │
+│  │  │ Speaker │   │   TTS    │                    │                   │
+│  │  │(3D-Spk) │   │(ax_tts)  │                    │                   │
+│  │  └─────────┘   └──────────┘                    │                   │
+│  └─────────────────────────────────────────────────┘                   │
+│                                                                       │
+│  ┌────────── Providers (可插拔) ───────────┐                          │
+│  │ ASR : mock_asr | ax_asr                  │                          │
+│  │ LLM : mock_llm | ax_llm | deepseek       │                          │
+│  │ TTS : mock_tts | ax_tts | edge_tts       │                          │
+│  │ SPK : mock_speaker | 3d_speaker           │                          │
+│  └───────────────────────────────────────────┘                          │
+└───────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────┐
+│              AX650 NPU Hardware               │
+│  axengine (AX_ASR / AX_TTS / axllm serve)    │
+└──────────────────────────────────────────────┘
 ```
 
 ## 特性
@@ -23,12 +66,12 @@
 - **WebSocket 实时对话**：`/v1/dialogue/ws`，支持流式 ASR → LLM → TTS 级联
 - **多 Provider 可插拔**：每个模块均支持 mock + 多种真实 Provider
 
-| 模块 | 可用 Provider |
-|------|--------------|
-| ASR  | mock_asr, ax_asr |
-| LLM  | mock_llm, deepseek |
-| TTS  | mock_tts, edge_tts, ax_tts |
-| Speaker | mock_speaker, 3d_speaker |
+| 模块 | 可用 Provider | 说明 |
+|------|--------------|------|
+| ASR  | ax_asr, mock_asr | ax_asr 基于爱芯 NPU，mock 用于测试 |
+| LLM  | ax_llm, deepseek, openai_compat, mock_llm | ax_llm 本地 NPU，deepseek 云端 fallback |
+| TTS  | ax_tts, edge_tts, mock_tts | ax_tts 本地 NPU，edge_tts 免费云端 fallback |
+| Speaker | 3d_speaker, mock_speaker | 3D-Speaker 基于 AXEngine |
 
 - **Web 控制台**：文字输入、麦克风流式录音、链路耗时指标、TTS 自动播放
 - **Silero VAD**：语音活动检测，自动切分有效语音段
@@ -131,6 +174,12 @@ curl -X POST http://localhost:8080/v1/audio/speech \
   -d '{"model":"tts-1","input":"你好","voice":"alloy"}'
 ```
 
+
+### 4. 端到端验证
+
+```bash
+scripts/smoke_test.sh --host <AX650_IP> --port 8080
+```
 ## 文档
 
 | 文档 | 说明 |

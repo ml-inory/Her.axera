@@ -2,6 +2,8 @@
 
 ## 1. 背景与目标
 
+> **📋 实现状态**：本文档描述的是**已完成实现**的设计。当前实现使用 `ax_asr`/`ax_tts`/`ax_llm` 等 NPU-native Provider。详见 [README](../README.md) 中的 Provider 表。
+
 本文档描述一个基于级联架构的语音对话系统设计方案。系统由 ASR、LLM、TTS 三类核心能力串联组成，通过 RESTful API 对外提供语音对话能力，并支持在 ASR 与 TTS 环节按业务需求选择不同模型。
 
 ### 1.1 建设目标

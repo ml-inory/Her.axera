@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Error handler: print last command and line number on failure
+error_handler() {
+    echo "[ERROR] Failed at line $1: $BASH_COMMAND" >&2
+}
+trap 'error_handler ${LINENO}' ERR
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOST="${HOST:-0.0.0.0}"

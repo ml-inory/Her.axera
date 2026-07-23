@@ -25,6 +25,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Security middleware (applied in order)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(TokenAuthMiddleware)
+
     app.include_router(health.router)
     app.include_router(system.router)
     app.include_router(openai_compat.router, prefix=settings.api_prefix)

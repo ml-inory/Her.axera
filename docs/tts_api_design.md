@@ -2,6 +2,8 @@
 
 ## 1. 目标
 
+> **📋 实现状态**：本文档描述的是**已完成实现**的设计。当前实现使用 `ax_asr`/`ax_tts`/`ax_llm` 等 NPU-native Provider。详见 [README](../README.md) 中的 Provider 表。
+
 TTS API 用于将文本合成为语音，为语音对话系统中的 `ASR + LLM + TTS` 级联链路提供语音输出能力。接口采用 RESTful API 设计，支持同步合成、异步合成、多模型选择、多音色、音频格式控制、语速语调控制和结果缓存。
 
 ## 2. 设计原则
