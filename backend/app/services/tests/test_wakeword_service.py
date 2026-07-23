@@ -35,7 +35,9 @@ class TestWakeWordServiceAvailability:
 class TestWakeWordDetection:
     def test_detect_returns_false_when_not_available(self) -> None:
         svc = WakeWordService()
-        assert svc.detect(b"dummy") is False
+        detected, name = svc.detect(b"dummy")
+        assert detected is False
+        assert name is None
 
     def test_detect_returns_false_when_model_is_none(self) -> None:
         _set_oww_available(True)
@@ -43,7 +45,9 @@ class TestWakeWordDetection:
         _enable_wake_word(svc)
         svc._model = None
         with patch.object(svc, "_get_model", return_value=None):
-            assert svc.detect(b"dummy") is False
+            detected, name = svc.detect(b"dummy")
+        assert detected is False
+        assert name is None
 
     def test_detect_with_model_prediction(self) -> None:
         _set_oww_available(True)
@@ -53,7 +57,9 @@ class TestWakeWordDetection:
         mock_model.predict.return_value = {"hey_jarvis": 0.8}
         svc._model = mock_model
         pcm = b"\x00\x00" * 400
-        assert svc.detect(pcm, sample_rate=16000) is True
+        detected, name = svc.detect(pcm, sample_rate=16000)
+
+        assert detected is True
 
     def test_detect_below_threshold(self) -> None:
         _set_oww_available(True)
@@ -63,7 +69,11 @@ class TestWakeWordDetection:
         mock_model.predict.return_value = {"hey_jarvis": 0.2}
         svc._model = mock_model
         pcm = b"\x00\x00" * 400
-        assert svc.detect(pcm, sample_rate=16000) is False
+        detected, name = svc.detect(pcm, sample_rate=16000)
+
+        assert detected is False
+
+        assert name is None
 
     def test_detect_handle_exception(self) -> None:
         _set_oww_available(True)
@@ -74,4 +84,8 @@ class TestWakeWordDetection:
         svc._model = mock_model
         pcm = b"\x00\x00" * 400
         # Should return False silently on exception
-        assert svc.detect(pcm, sample_rate=16000) is False
+        detected, name = svc.detect(pcm, sample_rate=16000)
+
+        assert detected is False
+
+        assert name is None

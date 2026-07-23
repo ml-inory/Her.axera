@@ -20,6 +20,23 @@ logger = logging.getLogger(__name__)
 # Trigger a partial ASR result after this many milliseconds of audio accumulated.
 PARTIAL_ASR_THRESHOLD_MS = 2000
 
+# Barge-in: minimum consecutive speech chunks to trigger interruption during active TTS.
+BARGEIN_SPEECH_CHUNKS = 3
+BARGEIN_ENERGY_THRESHOLD = 500  # RMS energy threshold for 16-bit PCM
+
+
+
+
+
+def _rms_energy(pcm_chunk: bytes) -> float:
+    """Calculate RMS energy of a 16-bit PCM audio chunk."""
+    import struct
+    if len(pcm_chunk) < 2:
+        return 0.0
+    n = len(pcm_chunk) // 2
+    samples = struct.unpack(f"<{n}h", pcm_chunk[:n * 2])
+    return (sum(s * s for s in samples) / n) ** 0.5
+
 
 class ConnectionState:
     def __init__(self) -> None:
@@ -28,6 +45,7 @@ class ConnectionState:
         self.buffers: dict[str, bytearray] = {}
         self.turn_options: dict[str, dict] = {}
         self.partial_sent: dict[str, bool] = {}
+        self.bargein_counter: int = 0  # consecutive speech chunks during active TTS
         self.send_lock = asyncio.Lock()
 
 
@@ -243,8 +261,28 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     if wakeword_service.available():
                         options = state.turn_options.get(chunk_turn_id, {})
                         input_sr = int(options.get("input_sample_rate") or 16000)
-                        if wakeword_service.detect(chunk_data, input_sr):
+                        detected, ww_name = wakeword_service.detect(chunk_data, input_sr)
+                    if detected:
                             await send_event({"type": "wake_word_detected", "trace_id": trace_id, "turn_id": chunk_turn_id})
+
+                    # Barge-in: detect speech during active TTS pipeline.
+                    if state.active_task and not state.active_task.done():
+                        energy = _rms_energy(chunk_data)
+                        if energy >= BARGEIN_ENERGY_THRESHOLD:
+                            state.bargein_counter += 1
+                            if state.bargein_counter >= BARGEIN_SPEECH_CHUNKS:
+                                # User is speaking — cancel active pipeline and start new turn
+                                bargein_turn = new_trace_id("turn")
+                                await cancel_active("barge_in", replacement_turn_id=bargein_turn)
+                                state.buffers[bargein_turn] = bytearray()
+                                state.turn_options[bargein_turn] = dict(state.turn_options.get(chunk_turn_id, {}))
+                                state.partial_sent[bargein_turn] = False
+                                state.bargein_counter = 0
+                                state.buffers[bargein_turn].extend(chunk_data)
+                                await send_event({"type": "speech_started", "trace_id": trace_id, "turn_id": bargein_turn})
+                                continue
+                        else:
+                            state.bargein_counter = max(0, state.bargein_counter - 1)
 
                     # Trigger partial ASR when buffer exceeds threshold.
                     if not state.partial_sent.get(chunk_turn_id, False):
@@ -283,6 +321,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     audio_content = _pcm_to_wav(pcm, sample_rate=sample_rate, channels=channels)
                     await send_event({"type": "accepted", "trace_id": trace_id, "turn_id": end_turn_id})
                     state.active_turn_id = end_turn_id
+                    state.bargein_counter = 0
                     state.active_task = asyncio.create_task(run_audio_pipeline(options, trace_id, audio_content, end_turn_id))
                     continue
 
