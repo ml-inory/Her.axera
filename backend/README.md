@@ -24,9 +24,9 @@ backend/
       speaker.py          # 说话人识别模型
       ...                 # ASR、LLM、TTS 模型
     services/
-      asr_service.py      # ASR 服务（mock, wenet, sensevoice, fireredasr）
+      asr_service.py      # ASR service (mock, ax_asr)
       llm_service.py      # LLM 服务（mock, deepseek）
-      tts_service.py      # TTS 服务（mock, edge_tts, kokoro, zipvoice）
+      tts_service.py      # TTS service (mock, edge_tts, ax_tts)
       speaker_service.py  # 说话人识别服务（mock, 3d_speaker）
       dialogue_service.py # 级联对话管线
     main.py               # FastAPI 应用入口
@@ -144,9 +144,7 @@ curl -X POST "http://localhost:8080/v1/speakers/identify" \
 | Provider | 类型 | 说明 |
 |----------|------|------|
 | mock_asr | Mock | 内置占位，返回模拟文本 |
-| wenet_onnx | 本地 | WeNet ONNX 模型，见 [部署指南](../docs/wenet_onnx_asr_deploy.md) |
-| sensevoice | 本地 | SenseVoice 多语言 ASR，见 [接入指南](../docs/sensevoice_asr_provider.md) |
-| fireredasr_aed | 本地 | FireRedASR-AED（AX650N），见 [接入指南](../docs/fireredasr_aed_asr_provider.md) |
+| ax_asr | 本地 | WeNet ONNX 模型，见 [部署指南](../docs/ax_asr_asr_deploy.md) |
 
 ### LLM Provider
 
@@ -161,8 +159,7 @@ curl -X POST "http://localhost:8080/v1/speakers/identify" \
 |----------|------|------|
 | mock_tts | Mock | 内置占位，生成合成 WAV |
 | edge_tts | 远程 | Microsoft Edge TTS，支持多种中英文音色 |
-| kokoro | 本地 | Kokoro AXEngine TTS |
-| zipvoice | 本地 | ZipVoice AXEngine TTS，支持声音克隆 |
+| ax_tts | 本地 | Kokoro AXEngine TTS |
 
 ### Speaker Provider
 

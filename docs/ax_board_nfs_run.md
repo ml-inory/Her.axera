@@ -45,7 +45,7 @@ The base backend install includes `silero-vad-axera`. The setup script keeps the
 Optionally download selected models. The downloader uses `huggingface_hub` and defaults to `https://hf-mirror.com`:
 
 ```bash
-scripts/ax650_setup_backend.sh --models "sensevoice kokoro speaker"
+scripts/ax650_setup_backend.sh --models "ax_asr kokoro speaker"
 ```
 
 Start the backend:
@@ -113,7 +113,7 @@ python3 backend/tools/download_ax_models.py all \
 Download only selected models:
 
 ```bash
-python3 backend/tools/download_ax_models.py sensevoice fireredasr kokoro zipvoice speaker \
+python3 backend/tools/download_ax_models.py ax_asr  speaker \
   --env-file backend/.env.models
 ```
 

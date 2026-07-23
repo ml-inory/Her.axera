@@ -38,7 +38,7 @@ class TestSettings:
             s = Settings()
             assert s.app_name == "Her Voice Dialogue API"
             assert s.api_prefix == "/v1"
-            assert s.default_asr_provider == "sensevoice"
+            assert s.default_asr_provider == "ax_asr"
             assert s.default_llm_provider == "deepseek"
             assert s.default_tts_provider == "edge_tts"
             assert s.llm_request_timeout == 60.0

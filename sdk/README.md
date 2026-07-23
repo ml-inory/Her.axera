@@ -19,8 +19,8 @@ pip install sdk/ --break-system-packages
 from her_axera_sdk import HerAxeraSDK
 
 sdk = HerAxeraSDK(
-    asr_model_path="/opt/models/asr/models-ax650",
-    tts_model_path="/opt/models/tts/models-ax650",
+    asr_model_path="/opt/models/asr/models",
+    tts_model_path="/opt/models/tts/models",
     llm_api_base="https://api.deepseek.com",
     llm_api_key="sk-xxx",
 )

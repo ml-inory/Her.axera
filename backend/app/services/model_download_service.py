@@ -1,26 +1,34 @@
 """Lazy model download manager for AX ASR/TTS providers.
 
-Downloads models from Hugging Face on demand, tracks progress per model,
+Downloads models from HuggingFace or ModelScope on demand, tracks progress per model,
 and exposes status for frontend polling.
 """
 
 from __future__ import annotations
 
-import asyncio
+import fnmatch
 import logging
 import os
+import shutil
 import threading
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable
 
-from app.core.config import get_settings
+import requests
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Model specs — what to download and where
+# Constants
+# ---------------------------------------------------------------------------
+
+MODELSCOPE_API = "https://modelscope.cn/api/v1"
+
+# ---------------------------------------------------------------------------
+# Model specs
 # ---------------------------------------------------------------------------
 
 
@@ -28,16 +36,19 @@ logger = logging.getLogger(__name__)
 class ModelDownloadSpec:
     """Describes a single model download target."""
 
-    key: str  # unique id, e.g. "asr_sensevoice_ax650"
-    display_name: str  # human-readable, e.g. "SenseVoice (AX650)"
-    repo_id: str  # HuggingFace repo, e.g. "AXERA-TECH/SenseVoice"
-    allow_patterns: list[str] | None = None  # glob patterns for hf_hub_download
+    key: str
+    display_name: str
+    repo_id: str
+    source: str = "modelscope"  # "modelscope" | "huggingface"
+    allow_patterns: list[str] | None = None
     ignore_patterns: list[str] | None = None
-    post_copy: list[tuple[str, str]] | None = None  # (src_rel, dst_rel) after download
-    local_dir: str | None = None  # if set, download to this dir directly
-    required_files: list[str] | None = None  # check these to verify download
-    depends_on: list[str] = field(default_factory=list)  # keys of prerequisite specs
-    model_type: str = ""  # "asr" | "tts" — which provider needs it
+    post_copy: list[tuple[str, str]] | None = None
+    local_dir: str | None = None
+    required_files: list[str] | None = None
+    depends_on: list[str] = field(default_factory=list)
+    model_type: str = ""
+    strip_prefix: str | None = None  # strip from downloaded path
+    rename_map: dict[str, str] = field(default_factory=dict)
 
 
 class DownloadStatus(str, Enum):
@@ -45,7 +56,8 @@ class DownloadStatus(str, Enum):
     DOWNLOADING = "downloading"
     DOWNLOADED = "downloaded"
     FAILED = "failed"
-    NOT_NEEDED = "not_needed"  # model not configured / provider disabled
+    CANCELLED = "cancelled"
+    NOT_NEEDED = "not_needed"
 
 
 @dataclass
@@ -66,317 +78,439 @@ class ModelDownloadState:
 
 
 def _build_model_specs() -> dict[str, ModelDownloadSpec]:
-    """Return the full catalog of downloadable models."""
-    settings = get_settings()
-    asr_root = Path(settings.ax_asr_model_path or "models-ax650")
-    tts_root = Path(settings.ax_tts_model_path or "models-ax650")
+    model_root = Path(os.environ.get("HER_AXERA_MODEL_ROOT", "/root/models/her-axera"))
+    asr_root = model_root / "asr"
+    tts_root = model_root / "tts"
 
     specs: dict[str, ModelDownloadSpec] = {}
 
-    # ---- ASR: SenseVoice ----
-    sensevoice_files = [
-        "sensevoice_ax650/sensevoice.axmodel",
-        "sensevoice_ax650/streaming_sensevoice.axmodel",
-    ]
-    specs["asr_sensevoice"] = ModelDownloadSpec(
-        key="asr_sensevoice",
-        display_name="SenseVoice ASR (AX650)",
-        repo_id="AXERA-TECH/SenseVoice",
-        allow_patterns=["sensevoice_ax650/*"],
-        local_dir=str(asr_root / "sensevoice"),
-        required_files=[str(asr_root / "sensevoice" / f) for f in sensevoice_files],
-        model_type="asr",
-    )
 
-    # ---- ASR: Whisper ----
-    whisper_files = [
-        "whisper_tiny/whisper_encoder_tiny.axmodel",
-        "whisper_tiny/whisper_decoder_tiny.axmodel",
-    ]
+
+    # ---- ASR: Whisper Tiny (ModelScope) ----
     specs["asr_whisper_tiny"] = ModelDownloadSpec(
         key="asr_whisper_tiny",
         display_name="Whisper Tiny (AX650)",
         repo_id="AXERA-TECH/Whisper",
-        allow_patterns=["models-ax650/*"],
+        source="modelscope",
+        allow_patterns=["models-ax650/tiny/*"],
+        ignore_patterns=["models-ax650/tiny/*tokens*", "models-ax650/tiny/*config*"],
+        strip_prefix="models-ax650/tiny",
+        rename_map={
+            "tiny-encoder.axmodel": "whisper_encoder_tiny.axmodel",
+            "tiny-decoder.axmodel": "whisper_decoder_tiny.axmodel",
+        },
         local_dir=str(asr_root / "whisper"),
-        post_copy=[("models-ax650", ".")],
-        required_files=[str(asr_root / "whisper" / f) for f in whisper_files],
-        model_type="asr",
-    )
-
-    # ---- TTS: Kokoro model files ----
-    kokoro_files = [
-        "kokoro_part1_96.axmodel",
-        "kokoro_part2_96.axmodel",
-        "kokoro_part3_96.axmodel",
-        "model4_har_sim.onnx",
-        "vocab.txt",
-    ]
-    specs["tts_kokoro_model"] = ModelDownloadSpec(
-        key="tts_kokoro_model",
-        display_name="Kokoro TTS Model (AX650)",
-        repo_id="AXERA-TECH/kokoro.axera",
-        allow_patterns=[
-            "models/kokoro_part1_96.axmodel",
-            "models/kokoro_part2_96.axmodel",
-            "models/kokoro_part3_96.axmodel",
-            "models/model4_har_sim.onnx",
+        required_files=[
+            str(asr_root / "whisper" / "whisper_encoder_tiny.axmodel"),
+            str(asr_root / "whisper" / "whisper_decoder_tiny.axmodel"),
         ],
-        local_dir=str(tts_root / "kokoro"),
-        required_files=[str(tts_root / "kokoro" / f) for f in kokoro_files[:4]],
-        model_type="tts",
-    )
-
-    # ---- TTS: Kokoro voices ----
-    specs["tts_kokoro_voices"] = ModelDownloadSpec(
-        key="tts_kokoro_voices",
-        display_name="Kokoro TTS Voices",
-        repo_id="AXERA-TECH/kokoro.axera",
-        allow_patterns=["cpp/voices/*"],
-        local_dir=str(tts_root / "kokoro" / "voices"),
-        required_files=[str(tts_root / "kokoro" / "voices" / "voices.json")],
-        depends_on=["tts_kokoro_model"],
-        model_type="tts",
-    )
-
-    # ---- TTS: Vocab (bundled with kokoro model but needs a check) ----
-    specs["tts_kokoro_vocab"] = ModelDownloadSpec(
-        key="tts_kokoro_vocab",
-        display_name="Kokoro Vocab",
-        repo_id="AXERA-TECH/kokoro.axera",
-        allow_patterns=["models/vocab.txt"],
-        local_dir=str(tts_root / "kokoro"),
-        required_files=[str(tts_root / "kokoro" / "vocab.txt")],
-        depends_on=["tts_kokoro_model"],
-        model_type="tts",
-    )
+        model_type="asr",
+    ),
 
     return specs
 
 
 # ---------------------------------------------------------------------------
-# Download manager (singleton)
+# Download Manager
 # ---------------------------------------------------------------------------
 
 
 class ModelDownloadManager:
-    """Tracks model download state and runs downloads in background threads."""
+    """Manages lazy, cancelable model downloads with progress tracking."""
 
     def __init__(self) -> None:
         self.specs = _build_model_specs()
-        self._states: dict[str, ModelDownloadState] = {}
         self._lock = threading.Lock()
-        self._download_threads: dict[str, threading.Thread] = {}
-        self._progress_callbacks: list[Callable[[str, ModelDownloadState], None]] = []
+        self._states: dict[str, ModelDownloadState] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._progress_callbacks: list[Callable] = []
+        self._init_states()
 
-    # ---- state queries ----
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def set_model_root(self, root: str) -> None:
+        """Change model storage root and rebuild specs/states."""
+        os.environ["HER_AXERA_MODEL_ROOT"] = root
+        self.specs = _build_model_specs()
+        with self._lock:
+            new_states: dict[str, ModelDownloadState] = {}
+            for key, spec in self.specs.items():
+                if key in self._states:
+                    old = self._states[key]
+                    new_states[key] = ModelDownloadState(
+                        spec=spec,
+                        status=old.status,
+                        progress_pct=old.progress_pct,
+                        downloaded_bytes=old.downloaded_bytes,
+                        total_bytes=old.total_bytes,
+                        error_message=old.error_message,
+                    )
+                else:
+                    new_states[key] = ModelDownloadState(spec=spec)
+            self._states = new_states
+        new_root = Path(root)
+        os.environ["AX_ASR_MODEL_PATH"] = str(new_root / "asr")
+        os.environ["AX_TTS_MODEL_PATH"] = str(new_root / "tts")
+        logger.info("Model root changed to %s", root)
 
     def get_state(self, key: str) -> ModelDownloadState | None:
         with self._lock:
-            if key not in self._states:
-                spec = self.specs.get(key)
-                if spec is None:
-                    return None
-                self._states[key] = ModelDownloadState(spec=spec)
-                # check if already downloaded
-                if self._is_downloaded(spec):
-                    self._states[key].status = DownloadStatus.DOWNLOADED
-            return self._states[key]
+            return self._states.get(key)
 
     def get_all_states(self) -> dict[str, ModelDownloadState]:
-        result: dict[str, ModelDownloadState] = {}
-        for key in self.specs:
-            state = self.get_state(key)
-            if state:
-                result[key] = state
-        return result
-
-    def get_states_by_type(self, model_type: str) -> dict[str, ModelDownloadState]:
-        return {
-            key: state
-            for key, state in self.get_all_states().items()
-            if state.spec.model_type == model_type
-        }
-
-    def is_ready(self, model_type: str) -> bool:
-        """Check if all models for a given provider type are downloaded."""
-        states = self.get_states_by_type(model_type)
-        if not states:
-            return True  # no models needed = ready
-        return all(s.status == DownloadStatus.DOWNLOADED for s in states.values())
-
-    def is_model_present(self, model_type: str, required_files: list[str] | None = None) -> bool:
-        """Quick check: are the model files on disk?"""
-        if required_files:
-            return all(Path(f).exists() for f in required_files)
-        states = self.get_states_by_type(model_type)
-        if not states:
-            return True
-        return all(self._is_downloaded(s.spec) for s in states.values())
-
-    # ---- download triggers ----
+        with self._lock:
+            return dict(self._states)
 
     def start_download(self, key: str) -> bool:
-        """Start downloading a model. Returns False if already done or in progress."""
-        state = self.get_state(key)
-        if state is None:
-            return False
-        if state.status in (DownloadStatus.DOWNLOADING, DownloadStatus.DOWNLOADED):
-            return False
-
         with self._lock:
-            state.status = DownloadStatus.DOWNLOADING
-            state.progress_pct = 0.0
-            state.error_message = ""
-            import time
+            if key not in self._states:
+                return False
+            state = self._states[key]
+            if state.status in (DownloadStatus.DOWNLOADING, DownloadStatus.DOWNLOADED):
+                return False
 
-            state.started_at = time.time()
+        spec = self.specs.get(key)
+        if spec and spec.depends_on:
+            for dep_key in spec.depends_on:
+                dep_state = self.get_state(dep_key)
+                if dep_state and dep_state.status != DownloadStatus.DOWNLOADED:
+                    logger.warning(
+                        "Dependency %s not ready for %s (status=%s)",
+                        dep_key, key,
+                        dep_state.status.value if dep_state else "unknown",
+                    )
 
-        thread = threading.Thread(target=self._download_thread, args=(key,), daemon=True)
-        self._download_threads[key] = thread
-        thread.start()
+        cancel = threading.Event()
+        with self._lock:
+            self._cancel_events[key] = cancel
+            self._states[key].status = DownloadStatus.DOWNLOADING
+            self._states[key].progress_pct = 0.0
+            self._states[key].downloaded_bytes = 0
+            self._states[key].total_bytes = 0
+            self._states[key].error_message = ""
+            self._states[key].started_at = time.time()
+
+        t = threading.Thread(target=self._download_thread, args=(key, cancel), daemon=True)
+        with self._lock:
+            self._threads[key] = t
+        t.start()
         return True
 
-    def start_download_all(self, model_type: str | None = None) -> list[str]:
-        """Start downloading all models, optionally filtered by type."""
-        started: list[str] = []
-        for key, spec in self.specs.items():
-            if model_type and spec.model_type != model_type:
-                continue
-            if self.start_download(key):
-                started.append(key)
-        return started
-
-    def on_progress(self, callback: Callable[[str, ModelDownloadState], None]) -> None:
-        """Register a callback invoked when progress changes."""
-        self._progress_callbacks.append(callback)
-
-    # ---- internals ----
-
-    def _is_downloaded(self, spec: ModelDownloadSpec) -> bool:
-        """Check if required files exist on disk."""
-        if spec.required_files:
-            return all(Path(f).exists() for f in spec.required_files)
-        if spec.local_dir:
-            return Path(spec.local_dir).is_dir() and any(Path(spec.local_dir).iterdir())
+    def cancel_download(self, key: str) -> bool:
+        with self._lock:
+            event = self._cancel_events.get(key)
+        if event:
+            event.set()
+            return True
         return False
 
-    def _download_thread(self, key: str) -> None:
-        """Background thread that downloads a single model."""
-        state = self.get_state(key)
-        if state is None:
-            return
-        spec = state.spec
+    def add_progress_callback(self, cb: Callable) -> None:
+        self._progress_callbacks.append(cb)
 
-        try:
-            self._do_download(spec, key)
-            with self._lock:
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _init_states(self) -> None:
+        for key, spec in self.specs.items():
+            state = ModelDownloadState(spec=spec)
+            if spec.required_files and all(Path(f).exists() for f in spec.required_files):
                 state.status = DownloadStatus.DOWNLOADED
                 state.progress_pct = 100.0
-                import time
+            self._states[key] = state
 
-                state.finished_at = time.time()
-        except Exception as exc:
-            logger.exception("Model download failed: %s", key)
+    def _download_thread(self, key: str, cancel: threading.Event) -> None:
+        spec = self.specs.get(key)
+        if spec is None:
+            return
+        try:
+            if spec.source == "modelscope":
+                self._download_from_modelscope(key, spec, cancel)
+            else:
+                self._download_from_huggingface(key, spec, cancel)
+        except InterruptedError:
             with self._lock:
-                state.status = DownloadStatus.FAILED
-                state.error_message = str(exc)
-                import time
-
-                state.finished_at = time.time()
-        finally:
+                if key in self._states:
+                    self._states[key].status = DownloadStatus.CANCELLED
+                    self._states[key].finished_at = time.time()
             self._notify_progress(key)
+        except Exception as exc:
+            logger.exception("Download %s failed", key)
+            with self._lock:
+                if key in self._states:
+                    self._states[key].status = DownloadStatus.FAILED
+                    self._states[key].error_message = str(exc)[:500]
+                    self._states[key].finished_at = time.time()
+            self._notify_progress(key)
+        finally:
+            with self._lock:
+                self._cancel_events.pop(key, None)
+                self._threads.pop(key, None)
 
-    def _do_download(self, spec: ModelDownloadSpec, key: str) -> None:
-        """Execute the actual download via huggingface_hub."""
-        from huggingface_hub import snapshot_download
+    # ------------------------------------------------------------------
+    # ModelScope download (REST API, no extra dependency)
+    # ------------------------------------------------------------------
 
-        endpoint = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
-        token = os.environ.get("HF_TOKEN")
+    def _list_modelscope_files(self, repo_id: str) -> list[dict]:
+        url = f"{MODELSCOPE_API}/models/{repo_id}/repo/files"
+        resp = requests.get(
+            url, params={"Revision": "master", "Recursive": "true"}, timeout=30
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("Code") != 200:
+            raise RuntimeError(f"ModelScope API error: {data}")
+        return data["Data"]["Files"]
 
+    def _download_from_modelscope(
+        self, key: str, spec: ModelDownloadSpec, cancel: threading.Event
+    ) -> None:
         local_dir = spec.local_dir or "."
         Path(local_dir).mkdir(parents=True, exist_ok=True)
 
-        # Build progress callback
-        last_pct = [0.0]
+        # 1. List and filter files
+        all_files = self._list_modelscope_files(spec.repo_id)
+        matching: list[dict] = []
+        if spec.allow_patterns:
+            for f in all_files:
+                if f.get("Type") != "blob":
+                    continue
+                fname = f["Path"]
+                for pat in spec.allow_patterns:
+                    if fnmatch.fnmatch(fname, pat):
+                        matching.append(f)
+                        break
+        else:
+            matching = [f for f in all_files if f.get("Type") == "blob"]
 
-        def _progress_callback(progress: int, total: int) -> None:
-            pct = progress / max(total, 1) * 100.0
-            if pct - last_pct[0] < 2.0 and pct < 99.9:
-                return
-            last_pct[0] = pct
+        if spec.ignore_patterns:
+            matching = [
+                f for f in matching
+                if not any(fnmatch.fnmatch(f["Path"], p) for p in spec.ignore_patterns)
+            ]
+
+        total_files = len(matching)
+        if total_files == 0:
+            raise RuntimeError(f"No files matched patterns {spec.allow_patterns}")
+
+        total_size = sum(f.get("Size", 0) for f in matching)
+        downloaded_size = 0
+
+        # 2. Download each file with streaming progress
+        for idx, file_info in enumerate(matching):
+            if cancel.is_set():
+                raise InterruptedError("Download cancelled")
+
+            fname = file_info["Path"]
+
+            # Strip prefix
+            target_name = fname
+            if spec.strip_prefix:
+                prefix = spec.strip_prefix.rstrip("/") + "/"
+                if fname.startswith(prefix):
+                    target_name = fname[len(prefix):]
+
+            # Apply rename map
+            base_name = os.path.basename(target_name)
+            if base_name in spec.rename_map:
+                parent = os.path.dirname(target_name)
+                target_name = (
+                    os.path.join(parent, spec.rename_map[base_name])
+                    if parent
+                    else spec.rename_map[base_name]
+                )
+
+            dst_path = os.path.join(local_dir, target_name)
+            Path(dst_path).parent.mkdir(parents=True, exist_ok=True)
+
+            try:
+                resp = requests.get(
+                    f"{MODELSCOPE_API}/models/{spec.repo_id}/repo",
+                    params={"Revision": "master", "FilePath": fname},
+                    stream=True,
+                    timeout=(30, 600),
+                )
+                resp.raise_for_status()
+
+                with open(dst_path, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
+                        if cancel.is_set():
+                            resp.close()
+                            raise InterruptedError("Download cancelled")
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            if total_size > 0:
+                                pct = downloaded_size / total_size * 100.0
+                            else:
+                                pct = (idx + 1) / total_files * 100.0
+                            with self._lock:
+                                state = self._states.get(key)
+                                if state:
+                                    state.progress_pct = round(pct, 1)
+                                    state.downloaded_bytes = downloaded_size
+                                    state.total_bytes = total_size
+
+                logger.info("Downloaded %s -> %s", fname, dst_path)
+
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                logger.warning("Failed to download %s: %s", fname, exc)
+
+            # File-count progress as floor
+            file_pct = (idx + 1) / total_files * 100.0
             with self._lock:
                 state = self._states.get(key)
-                if state:
-                    state.progress_pct = round(pct, 1)
-                    state.downloaded_bytes = progress
-                    state.total_bytes = total
+                if state and state.progress_pct < file_pct:
+                    state.progress_pct = round(file_pct, 1)
             self._notify_progress(key)
 
-        # Download allowed patterns into a temp dir, then copy
-        import tempfile
-        import shutil
+        # 3. post_copy
+        if spec.post_copy:
+            for src_rel, dst_rel in spec.post_copy:
+                src_dir = os.path.join(local_dir, src_rel)
+                dst_dir = os.path.join(local_dir, dst_rel) if dst_rel != "." else local_dir
+                if os.path.isdir(src_dir) and src_dir != dst_dir:
+                    for item in os.listdir(src_dir):
+                        s = os.path.join(src_dir, item)
+                        d = os.path.join(dst_dir, item)
+                        if os.path.isdir(s):
+                            if os.path.exists(d):
+                                shutil.rmtree(d, ignore_errors=True)
+                            shutil.move(s, d)
+                        else:
+                            shutil.move(s, d)
+                    shutil.rmtree(src_dir, ignore_errors=True)
 
-        if spec.allow_patterns:
-            # For pattern-based downloads, download into a temp dir then move
-            with tempfile.TemporaryDirectory(prefix="her_model_") as tmpdir:
-                snapshot_download(
-                    repo_id=spec.repo_id,
-                    repo_type="model",
-                    revision="main",
-                    local_dir=tmpdir,
-                    endpoint=endpoint,
-                    token=token,
-                    allow_patterns=spec.allow_patterns,
-                    ignore_patterns=spec.ignore_patterns,
-                    max_workers=4,
-                    tqdm_class=None,
-                )
-                # Copy from tmpdir to local_dir
-                for item in os.listdir(tmpdir):
-                    src = os.path.join(tmpdir, item)
-                    dst = os.path.join(local_dir, item)
-                    if os.path.isdir(src):
-                        if os.path.exists(dst):
-                            shutil.rmtree(dst, ignore_errors=True)
-                        shutil.copytree(src, dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(src, dst)
-
-            # Handle post_copy (move files from subdir to root)
-            if spec.post_copy:
-                for src_rel, dst_rel in spec.post_copy:
-                    src_dir = os.path.join(local_dir, src_rel)
-                    dst_dir = os.path.join(local_dir, dst_rel) if dst_rel != "." else local_dir
-                    if os.path.isdir(src_dir) and src_dir != dst_dir:
-                        for item in os.listdir(src_dir):
-                            s = os.path.join(src_dir, item)
-                            d = os.path.join(dst_dir, item)
-                            if os.path.isdir(s):
-                                if os.path.exists(d):
-                                    shutil.rmtree(d, ignore_errors=True)
-                                shutil.move(s, d)
-                            else:
-                                shutil.move(s, d)
-                        shutil.rmtree(src_dir, ignore_errors=True)
-        else:
-            # Full repo download into local_dir
-            snapshot_download(
-                repo_id=spec.repo_id,
-                repo_type="model",
-                revision="main",
-                local_dir=local_dir,
-                endpoint=endpoint,
-                token=token,
-                max_workers=4,
-                tqdm_class=None,
-            )
-
-        # Verify
+        # 4. Verify
         if spec.required_files:
             missing = [f for f in spec.required_files if not Path(f).exists()]
             if missing:
                 raise RuntimeError(f"Download completed but missing files: {missing}")
+
+        # 5. Mark done
+        with self._lock:
+            if key in self._states:
+                self._states[key].status = DownloadStatus.DOWNLOADED
+                self._states[key].progress_pct = 100.0
+                self._states[key].finished_at = time.time()
+        self._notify_progress(key)
+
+    # ------------------------------------------------------------------
+    # HuggingFace download (fallback)
+    # ------------------------------------------------------------------
+
+    def _download_from_huggingface(
+        self, key: str, spec: ModelDownloadSpec, cancel: threading.Event
+    ) -> None:
+        os.environ["HF_HUB_DISABLE_XET"] = "1"
+
+        endpoint = os.environ.get("HF_ENDPOINT", "https://hf-mirror.com")
+        token = os.environ.get("HF_TOKEN")
+        local_dir = spec.local_dir or "."
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+
+        from huggingface_hub import HfApi, hf_hub_download
+
+        api = HfApi(endpoint=endpoint, token=token)
+        all_files = list(api.list_repo_files(spec.repo_id, repo_type="model", revision="main"))
+
+        matching: list[str] = []
+        if spec.allow_patterns:
+            for fname in all_files:
+                for pat in spec.allow_patterns:
+                    if fnmatch.fnmatch(fname, pat):
+                        matching.append(fname)
+                        break
+        else:
+            matching = all_files
+
+        if spec.ignore_patterns:
+            matching = [
+                f for f in matching
+                if not any(fnmatch.fnmatch(f, p) for p in spec.ignore_patterns)
+            ]
+
+        total_files = len(matching)
+        if total_files == 0:
+            raise RuntimeError(f"No files matched patterns {spec.allow_patterns}")
+
+        for idx, fname in enumerate(matching):
+            if cancel.is_set():
+                raise InterruptedError("Download cancelled")
+
+            target_name = fname
+            if spec.allow_patterns:
+                for pat in spec.allow_patterns:
+                    prefix = pat.rstrip("*").rstrip("/")
+                    if prefix and fname.startswith(prefix + "/"):
+                        target_name = fname[len(prefix) + 1:]
+                        break
+
+            try:
+                hf_hub_download(
+                    repo_id=spec.repo_id,
+                    filename=fname,
+                    repo_type="model",
+                    revision="main",
+                    local_dir=local_dir,
+                    local_dir_use_symlinks=False,
+                    endpoint=endpoint,
+                    token=token,
+                )
+                if target_name != fname:
+                    src_path = os.path.join(local_dir, fname)
+                    dst_path = os.path.join(local_dir, target_name)
+                    Path(dst_path).parent.mkdir(parents=True, exist_ok=True)
+                    if os.path.exists(src_path):
+                        shutil.move(src_path, dst_path)
+            except Exception:
+                logger.warning("Failed to download %s, skipping", fname)
+
+            pct = (idx + 1) / total_files * 100.0
+            with self._lock:
+                state = self._states.get(key)
+                if state:
+                    state.progress_pct = round(pct, 1)
+                    state.downloaded_bytes = idx + 1
+                    state.total_bytes = total_files
+            self._notify_progress(key)
+
+        if spec.post_copy:
+            for src_rel, dst_rel in spec.post_copy:
+                src_dir = os.path.join(local_dir, src_rel)
+                dst_dir = os.path.join(local_dir, dst_rel) if dst_rel != "." else local_dir
+                if os.path.isdir(src_dir) and src_dir != dst_dir:
+                    for item in os.listdir(src_dir):
+                        s = os.path.join(src_dir, item)
+                        d = os.path.join(dst_dir, item)
+                        if os.path.isdir(s):
+                            if os.path.exists(d):
+                                shutil.rmtree(d, ignore_errors=True)
+                            shutil.move(s, d)
+                        else:
+                            shutil.move(s, d)
+                    shutil.rmtree(src_dir, ignore_errors=True)
+
+        if spec.required_files:
+            missing = [f for f in spec.required_files if not Path(f).exists()]
+            if missing:
+                raise RuntimeError(f"Download completed but missing files: {missing}")
+
+        with self._lock:
+            if key in self._states:
+                self._states[key].status = DownloadStatus.DOWNLOADED
+                self._states[key].progress_pct = 100.0
+                self._states[key].finished_at = time.time()
+        self._notify_progress(key)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _notify_progress(self, key: str) -> None:
         state = self.get_state(key)

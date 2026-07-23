@@ -52,14 +52,6 @@ logger = logging.getLogger("her_axera_sdk")
 
 _ASR_MODELS = [
     ModelSpec(
-        key="asr_sensevoice",
-        name="SenseVoice ASR",
-        repo_id="AXERA-TECH/SenseVoice",
-        allow_patterns=["sensevoice_ax650/*"],
-        required_files=["sensevoice/sensevoice.axmodel"],
-        size_hint="~120 MB",
-    ),
-    ModelSpec(
         key="asr_whisper_tiny",
         name="Whisper Tiny",
         repo_id="AXERA-TECH/Whisper",
@@ -69,29 +61,7 @@ _ASR_MODELS = [
     ),
 ]
 
-_TTS_MODELS = [
-    ModelSpec(
-        key="tts_kokoro_model",
-        name="Kokoro TTS Model",
-        repo_id="AXERA-TECH/kokoro.axera",
-        allow_patterns=[
-            "models/kokoro_part1_96.axmodel",
-            "models/kokoro_part2_96.axmodel",
-            "models/kokoro_part3_96.axmodel",
-            "models/model4_har_sim.onnx",
-        ],
-        required_files=["kokoro/kokoro_part1_96.axmodel"],
-        size_hint="~450 MB",
-    ),
-    ModelSpec(
-        key="tts_kokoro_voices",
-        name="Kokoro Voices",
-        repo_id="AXERA-TECH/kokoro.axera",
-        allow_patterns=["cpp/voices/*"],
-        required_files=["kokoro/voices/voices.json"],
-        size_hint="~5 MB",
-    ),
-]
+_TTS_MODELS: list[ModelSpec] = []
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +75,9 @@ class HerAxeraSDK:
     Parameters
     ----------
     asr_model_path:
-        Root directory for ASR models. Models are stored in ``<path>/sensevoice/`` etc.
+        Root directory for ASR models.
     tts_model_path:
-        Root directory for TTS models. Models are stored in ``<path>/kokoro/`` etc.
+        Root directory for TTS models.
     llm_api_base:
         OpenAI-compatible API base URL, e.g. ``https://api.deepseek.com``.
     llm_api_key:

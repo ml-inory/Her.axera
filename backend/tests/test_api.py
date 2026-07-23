@@ -83,7 +83,7 @@ def test_provider_lists_include_axera_models() -> None:
     tts_response = client.get("/v1/tts/providers")
     assert tts_response.status_code == 200
     tts_names = {provider["name"] for provider in tts_response.json()["providers"]}
-    assert {"kokoro", "zipvoice"}.issubset(tts_names)
+    assert {"ax_tts"}.issubset(tts_names)
 
     speaker_response = client.get("/v1/speakers/providers")
     assert speaker_response.status_code == 200

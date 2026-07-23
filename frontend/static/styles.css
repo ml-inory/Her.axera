@@ -130,6 +130,8 @@ button { border: 0; cursor: pointer; background: none; }
 .obPrimary:hover { background: var(--accent); }
 .obPrimary:active { transform: scale(0.98); }
 .obPrimary:disabled { opacity: 0.4; cursor: not-allowed; }
+.obPrimary.danger { background: var(--danger); }
+.obPrimary.danger:hover { background: #c0392b; }
 
 .obGhost {
   padding: 10px 20px;
@@ -178,23 +180,49 @@ button { border: 0; cursor: pointer; background: none; }
   border-radius: var(--radius-sm);
 }
 
-.obModelCheck {
-  width: 18px; height: 18px;
+.obModelCheckWrap {
   flex-shrink: 0;
+  position: relative;
+}
+.obModelCb {
+  display: none;
+}
+.obModelCheckbox {
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
   border-radius: 4px;
   border: 2px solid var(--ink-muted);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 10px;
+  cursor: pointer;
   transition: all 0.2s;
 }
-.obModelCheck.done {
+.obModelCb:checked + .obModelCheckbox {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.obModelCb:checked + .obModelCheckbox::after {
+  content: "✓";
+  color: #fff;
+  font-size: 11px;
+}
+.obModelCb:disabled + .obModelCheckbox {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.obModelItem.done .obModelCheckbox {
   background: var(--ok);
   border-color: var(--ok);
-  color: #fff;
 }
-.obModelCheck.downloading {
+.obModelItem.done .obModelCheckbox::after {
+  content: "✓";
+  color: #fff;
+  font-size: 11px;
+}
+.obModelItem.downloading .obModelCheckbox {
   border-color: var(--accent);
   animation: obPulse 1.2s ease-in-out infinite;
+}
+.obModelItem.downloading .obModelCheckbox::after {
+  content: "";
 }
 
 @keyframes obPulse {
@@ -594,3 +622,55 @@ button { border: 0; cursor: pointer; background: none; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+
+/* ---- Disk selector ---- */
+.obDiskSection { margin: 12px 0; }
+.obDiskTitle { font-size: 12px; color: var(--ink-dim); margin-bottom: 6px; }
+.obDiskList { display: flex; flex-direction: column; gap: 4px; }
+.obDiskRow {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line-light); cursor: pointer;
+  font-size: 12px; transition: all 0.15s;
+}
+.obDiskRow:hover { border-color: var(--accent); }
+.obDiskRow.selected { border-color: var(--accent); background: rgba(99,102,241,0.06); }
+.obDiskRadio {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--ink-muted); transition: all 0.15s;
+}
+.obDiskRow.selected .obDiskRadio { border-color: var(--accent); background: var(--accent); }
+.obDiskPath { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 11px; }
+.obDiskSpace { flex-shrink: 0; font-size: 11px; color: var(--ink-dim); }
+
+
+/* ---- Replay button ---- */
+.replayBtn {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--ink-muted);
+  font-size: 12px;
+  cursor: default;
+  opacity: 0.4;
+  transition: all 0.2s;
+}
+.replayBtn.ready {
+  opacity: 1;
+  cursor: pointer;
+  color: #fff;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  animation: replayPulse 0.6s ease-in-out;
+}
+.replayBtn.ready:hover {
+  filter: brightness(1.2);
+}
+@keyframes replayPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}

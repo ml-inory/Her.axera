@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import asr, health, llm, models, openai_compat, sessions, speakers, tts, users, ws_dialogue
+from app.api.routes import asr, health, llm, models, openai_compat, sessions, speakers, system, tts, users, ws_dialogue
 from app.core.config import get_settings
 from app.core.errors import AppError, app_error_handler
 
@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health.router)
+    app.include_router(system.router)
     app.include_router(openai_compat.router, prefix=settings.api_prefix)
     app.include_router(asr.router, prefix=settings.api_prefix)
     app.include_router(llm.router, prefix=settings.api_prefix)

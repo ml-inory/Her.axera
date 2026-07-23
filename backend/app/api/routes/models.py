@@ -42,6 +42,7 @@ class ModelsStatusResponse(BaseModel):
 class DownloadTriggerRequest(BaseModel):
     keys: list[str] = Field(default_factory=list, description="Specific model keys to download; empty = all")
     model_type: str | None = Field(default=None, description="Filter by model_type: 'asr' or 'tts'")
+    target_dir: str | None = Field(default=None, description="Override model storage root directory")
 
 
 class DownloadTriggerResponse(BaseModel):
@@ -79,10 +80,46 @@ def get_model_download_status(model_type: str | None = Query(default=None, descr
     all_ready = all(s.status == DownloadStatus.DOWNLOADED for s in states.values()) if states else True
     return ModelsStatusResponse(models=items, all_ready=all_ready)
 
+class CancelDownloadRequest(BaseModel):
+    keys: list[str] = Field(default_factory=list, description="Specific model keys to cancel; empty = cancel all")
+
+
+class CancelDownloadResponse(BaseModel):
+    cancelled: list[str]
+    not_found: list[str]
+
+
+@router.delete("/models/download", response_model=CancelDownloadResponse)
+def cancel_model_download(body: CancelDownloadRequest) -> CancelDownloadResponse:
+    mgr = get_model_download_manager()
+
+    if body.keys:
+        target_keys = body.keys
+    else:
+        target_keys = list(mgr.specs.keys())
+
+    cancelled: list[str] = []
+    not_found: list[str] = []
+
+    for key in target_keys:
+        state = mgr.get_state(key)
+        if state is None:
+            not_found.append(key)
+            continue
+        if mgr.cancel_download(key):
+            cancelled.append(key)
+        else:
+            not_found.append(key)
+
+    return CancelDownloadResponse(cancelled=cancelled, not_found=not_found)
+
 
 @router.post("/models/download", response_model=DownloadTriggerResponse)
 def trigger_model_download(body: DownloadTriggerRequest) -> DownloadTriggerResponse:
     mgr = get_model_download_manager()
+
+    if body.target_dir:
+        mgr.set_model_root(body.target_dir)
 
     # Determine which keys to download
     if body.keys:

@@ -25,9 +25,9 @@
 
 | 模块 | 可用 Provider |
 |------|--------------|
-| ASR  | mock_asr, wenet_onnx, sensevoice, fireredasr_aed |
+| ASR  | mock_asr, ax_asr |
 | LLM  | mock_llm, deepseek |
-| TTS  | mock_tts, edge_tts, kokoro, zipvoice |
+| TTS  | mock_tts, edge_tts, ax_tts |
 | Speaker | mock_speaker, 3d_speaker |
 
 - **Web 控制台**：文字输入、麦克风流式录音、链路耗时指标、TTS 自动播放
@@ -49,7 +49,7 @@ scripts/ax650_setup_backend.sh
 按需下载模型，默认走 `https://hf-mirror.com`：
 
 ```bash
-scripts/ax650_setup_backend.sh --models "sensevoice kokoro speaker"
+scripts/ax650_setup_backend.sh --models "speaker"
 ```
 
 脚本不会覆盖已有 `backend/.env`。模型下载后会生成 `backend/.env.models`，请确认后再把需要的配置合并进 `backend/.env`。
@@ -142,9 +142,6 @@ curl -X POST http://localhost:8080/v1/audio/speech \
 | [ASR API 设计](docs/asr_api_design.md) | ASR 接口设计 |
 | [LLM API 设计](docs/llm_api_design.md) | LLM 接口设计 |
 | [TTS API 设计](docs/tts_api_design.md) | TTS 接口设计 |
-| [WeNet ONNX 部署](docs/wenet_onnx_asr_deploy.md) | WeNet ASR 部署指南 |
-| [SenseVoice ASR](docs/sensevoice_asr_provider.md) | SenseVoice ASR 接入指南 |
-| [FireRedASR-AED](docs/fireredasr_aed_asr_provider.md) | FireRedASR-AED 接入指南 |
 | [AX 板 NFS 运行](docs/ax_board_nfs_run.md) | 通过 NFS mount 在 AX 板上验证 |
 
 ## 支持平台

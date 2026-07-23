@@ -30,68 +30,15 @@ class ModelSpec:
 
 MODEL_SPECS: tuple[ModelSpec, ...] = (
     ModelSpec(
-        key="sensevoice",
-        repo_id="AXERA-TECH/SenseVoice",
-        local_dir="SenseVoice",
-        aliases=("sensevoice", "asr-sensevoice"),
-        env=(
-            ("ENABLE_SENSEVOICE_ASR", "true"),
-            ("SENSEVOICE_REPO_PATH", "{path}"),
-        ),
-    ),
-    ModelSpec(
-        key="wenet",
-        repo_id="AXERA-TECH/WeNet",
-        local_dir="WeNet",
-        aliases=("wenet", "wenet-onnx"),
-        env=(
-            ("ENABLE_WENET_ASR", "true"),
-            ("WENET_REPO_PATH", "{path}"),
-            ("WENET_ONNX_DIR", "{path}/onnx_model"),
-            ("WENET_CONFIG_PATH", "{path}/onnx_model/config.yaml"),
-            ("WENET_VOCAB_PATH", "{path}/units.txt"),
-        ),
-        note="wenet_onnx also needs a compatible runner layout; validate paths before enabling it as default.",
-    ),
-    ModelSpec(
         key="whisper",
         repo_id="AXERA-TECH/Whisper",
         local_dir="Whisper",
-        aliases=("whisper", "asr-whisper"),
-        note="download only; this backend does not yet expose a dedicated whisper provider.",
-    ),
-    ModelSpec(
-        key="fireredasr",
-        repo_id="AXERA-TECH/FireRedASR-AED",
-        local_dir="FireRedASR-AED",
-        aliases=("fireredasr", "fireredasr-aed", "fire-red-asr"),
+        aliases=("whisper", "asr-whisper", "whisper-tiny"),
         env=(
-            ("ENABLE_FIREREDASR_ASR", "true"),
-            ("FIREREDASR_REPO_PATH", "{path}"),
-            ("FIREREDASR_MODEL_DIR", "{path}/axmodel"),
+            ("AX_ASR_MODEL_TYPE", "whisper_tiny"),
+            ("AX_ASR_MODEL_PATH", "{path}"),
         ),
-    ),
-    ModelSpec(
-        key="kokoro",
-        repo_id="AXERA-TECH/kokoro.axera",
-        local_dir="kokoro.axera",
-        aliases=("kokoro", "kokoro-tts"),
-        env=(
-            ("ENABLE_KOKORO_TTS", "true"),
-            ("KOKORO_REPO_PATH", "{path}"),
-            ("KOKORO_MODEL_DIR", "{path}/axmodel"),
-        ),
-    ),
-    ModelSpec(
-        key="zipvoice",
-        repo_id="AXERA-TECH/ZipVoice.AXERA",
-        local_dir="ZipVoice.AXERA",
-        aliases=("zipvoice", "zipvoice-tts"),
-        env=(
-            ("ENABLE_ZIPVOICE_TTS", "true"),
-            ("ZIPVOICE_REPO_PATH", "{path}"),
-            ("ZIPVOICE_MODEL_DIR", "{path}/axmodel"),
-        ),
+        model_type="asr",
     ),
     ModelSpec(
         key="speaker",
@@ -101,10 +48,11 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
         env=(
             ("ENABLE_SPEAKER_RECOGNITION", "true"),
             ("SPEAKER_REPO_PATH", "{path}"),
-            ("SPEAKER_MODEL_DIR", "{path}/axmodel"),
         ),
+        model_type="speaker",
     ),
 )
+
 
 
 def _spec_by_alias() -> dict[str, ModelSpec]:
@@ -196,7 +144,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "models",
         nargs="*",
-        help="Models to download: all, sensevoice, wenet, whisper, fireredasr, kokoro, zipvoice, speaker.",
+        help="Models to download: all, whisper, speaker.",
     )
     parser.add_argument(
         "--root",

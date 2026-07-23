@@ -7,7 +7,7 @@
 - 对齐 OpenAI 常见接口路径和请求/响应结构，降低客户端集成成本。
 - ASR、LLM、TTS 统一放在 `/v1` 下。
 - 兼容标准字段，同时允许通过扩展字段选择本系统 Provider。
-- 保留多模型路由能力，例如 `mock_asr`、`sensevoice`、`fireredasr_aed`、`deepseek`、`edge_tts`。
+- 保留多模型路由能力，例如 `mock_asr`、`ax_asr`、`ax_asr`、`deepseek`、`edge_tts`。
 
 ## 2. 接口总览
 
@@ -134,7 +134,7 @@ Content-Type: multipart/form-data
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | file | file | 是 | 待识别音频文件，对齐 OpenAI 字段名。 |
-| model | string | 否 | 默认 `whisper-1`；也可传 `sensevoice`、`fireredasr_aed`、`mock_asr` 等。 |
+| model | string | 否 | 默认 `whisper-1`；也可传 `ax_asr`、`ax_asr`、`mock_asr` 等。 |
 | language | string | 否 | 语言，例如 `zh`、`zh-CN`、`en`、`auto`。 |
 | prompt | string | 否 | 保留兼容字段。 |
 | response_format | string | 否 | `json`、`text`、`verbose_json`；`srt/vtt` 暂不支持。 |
@@ -147,7 +147,7 @@ Content-Type: multipart/form-data
 ```bash
 curl -X POST "http://127.0.0.1:8080/v1/audio/transcriptions" \
   -F "file=@input.wav" \
-  -F "model=fireredasr_aed" \
+  -F "model=ax_asr" \
   -F "language=zh" \
   -F "response_format=verbose_json"
 ```
@@ -170,8 +170,8 @@ curl -X POST "http://127.0.0.1:8080/v1/audio/transcriptions" \
   "text": "开放时间早上9点至下午5点。",
   "segments": [],
   "trace_id": "trc_xxx",
-  "provider": "fireredasr_aed",
-  "model": "fireredasr-aed-ax650n"
+  "provider": "ax_asr",
+  "model": "ax_asr_sensevoice"
 }
 ```
 
