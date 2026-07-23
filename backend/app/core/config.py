@@ -43,6 +43,7 @@ class Settings:
     enable_wake_word: bool = _get_bool("ENABLE_WAKE_WORD", False)
     wake_word_model: str = os.getenv("WAKE_WORD_MODEL", "hey_jarvis")
     wake_word_threshold: float = float(os.getenv("WAKE_WORD_THRESHOLD", "0.5"))
+    default_system_prompt: str = os.getenv("DEFAULT_SYSTEM_PROMPT", "你是一个简洁、友好的语音助手。优先用简短自然的中文回答。")
     enable_emotion_detection: bool = _get_bool("ENABLE_EMOTION_DETECTION", False)
     enable_vision: bool = _get_bool("ENABLE_VISION", False)
     vision_model: str | None = os.getenv("VISION_MODEL")

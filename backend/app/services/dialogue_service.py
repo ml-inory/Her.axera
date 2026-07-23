@@ -406,7 +406,7 @@ class DialogueService:
             }
 
         # Enrich system prompt with speaker identity and emotion detection.
-        effective_system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+        effective_system_prompt = system_prompt or self.settings.default_system_prompt
         if self.settings.enable_emotion_detection:
             effective_system_prompt += EMOTION_PROMPT_SUFFIX
         if speaker_result is not None and speaker_result.confidence >= 0.5:
@@ -509,7 +509,7 @@ class DialogueService:
             trace_id=trace_id,
             session_id=session_id,
             user_message=user_message,
-            effective_system_prompt=(system_prompt or DEFAULT_SYSTEM_PROMPT) + (EMOTION_PROMPT_SUFFIX if self.settings.enable_emotion_detection else ""),
+            effective_system_prompt=(system_prompt or self.settings.default_system_prompt) + (EMOTION_PROMPT_SUFFIX if self.settings.enable_emotion_detection else ""),
             user_id=user_id,
             llm_provider=llm_provider,
             llm_model=llm_model,

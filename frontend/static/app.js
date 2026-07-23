@@ -66,6 +66,7 @@ const els = {
   ttsProvider: document.querySelector("#ttsProvider"),
   voice: document.querySelector("#voice"),
   llmApiKey: document.querySelector("#llmApiKey"),
+  systemPrompt: document.querySelector("#systemPrompt"),
   textInput: document.querySelector("#textInput"),
   sendButton: document.querySelector("#sendButton"),
   recordButton: document.querySelector("#recordButton"),
@@ -770,6 +771,7 @@ els.recordButton.addEventListener("click", () => {
 });
 els.stopAudioButton.addEventListener("click", stopAudio);
 els.llmApiKey.addEventListener("input", () => localStorage.setItem("her.llmApiKey", els.llmApiKey.value.trim()));
+els.systemPrompt && els.systemPrompt.addEventListener("input", () => localStorage.setItem("her.systemPrompt", els.systemPrompt.value));
 
 els.conversation.addEventListener("click", (e) => {
   const btn = e.target.closest(".replayBtn");
