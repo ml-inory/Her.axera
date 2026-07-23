@@ -1,0 +1,13 @@
+[Unit]
+Description=Her.axera AX LLM inference service (ax-llm)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=axllm serve --port @AXLLM_PORT@ --model-path @MODEL_PATH@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -117,6 +117,36 @@ if [[ "${START}" -eq 1 ]]; then
   sudo systemctl restart "${SERVICE_NAME}.service"
 fi
 
+
+# ── ax-llm service ─────────────────────────────────────────
+
+AXLLM_TEMPLATE="${REPO_ROOT}/systemd/her-axera-axllm.service.in"
+AXLLM_SERVICE_NAME="her-axera-axllm"
+AXLLM_PORT="${AXLLM_PORT:-8000}"
+AXLLM_MODEL_PATH="${AXLLM_MODEL_PATH:-/opt/models/her-axera/ax-llm}"
+
+if [[ -f "${AXLLM_TEMPLATE}" ]] && command -v axllm &>/dev/null; then
+  echo "[axllm] installing systemd service..."
+  AXLLM_TMP="$(mktemp)"
+  trap 'rm -f "${AXLLM_TMP}"' EXIT
+  sed     -e "s|@AXLLM_PORT@|${AXLLM_PORT}|g"     -e "s|@MODEL_PATH@|${AXLLM_MODEL_PATH}|g"     "${AXLLM_TEMPLATE}" >"${AXLLM_TMP}"
+
+  sudo install -m 0644 "${AXLLM_TMP}" "/etc/systemd/system/${AXLLM_SERVICE_NAME}.service"
+  rm -f "${AXLLM_TMP}"
+  sudo systemctl daemon-reload
+
+  if [[ "${ENABLE}" -eq 1 ]]; then
+    sudo systemctl enable "${AXLLM_SERVICE_NAME}.service"
+  fi
+  if [[ "${START}" -eq 1 ]]; then
+    sudo systemctl restart "${AXLLM_SERVICE_NAME}.service"
+  fi
+
+  echo "[axllm] service installed: systemctl status ${AXLLM_SERVICE_NAME}.service"
+else
+  echo "[axllm] skip — axllm not found or template missing"
+fi
+
 echo "[status] systemctl status ${SERVICE_NAME}.service"
 echo "[logs] journalctl -u ${SERVICE_NAME}.service -f"
 echo "[start] sudo systemctl restart ${SERVICE_NAME}.service"

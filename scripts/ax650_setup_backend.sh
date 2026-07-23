@@ -160,12 +160,7 @@ PY
   fi
 fi
 
-if [[ "${INSTALL_WENET}" -eq 1 ]]; then
-  python -m pip install -r backend/requirements-wenet-onnx.txt
-fi
 
-if [[ "${INSTALL_FIRERED}" -eq 1 ]]; then
-fi
 
 if [[ "${#MODELS[@]}" -gt 0 ]]; then
   export HF_ENDPOINT

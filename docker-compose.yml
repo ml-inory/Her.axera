@@ -1,4 +1,32 @@
+# Her.axera Docker Compose — 一键启动完整语音对话系统
+#
+# 使用方式:
+#   cp backend/.env.example backend/.env   # 编辑配置
+#   docker-compose up -d                   # 启动所有服务
+#
+# 注意: Docker 主要用于 x86 开发/CI 验证。
+# AX650 板端部署请使用 ./deploy.sh 或 systemd 服务。
+
 services:
+  # ── ax-llm (本地 NPU LLM 推理服务) ──
+  axllm:
+    image: ghcr.io/axera-tech/ax-llm:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models/ax-llm:/models
+    command: serve --port 8000 --model-path /models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - full
+      - ax650
+
+  # ── Backend (FastAPI) ──
   backend:
     build:
       context: .
@@ -9,12 +37,27 @@ services:
       - ./backend/data:/app/data
     env_file:
       - ./backend/.env
+    environment:
+      - AX_LLM_API_BASE=http://axllm:8000/v1
+      - AX_LLM_HEALTH_URL=http://axllm:8000/health
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      axllm:
+        condition: service_healthy
+        required: false
 
+  # ── Frontend (静态 Web 控制台) ──
   frontend:
     build: ./frontend
     ports:
       - "7860:7860"
+    environment:
+      - BACKEND_URL=http://backend:8080
+    restart: unless-stopped
     depends_on:
       - backend
-    restart: unless-stopped

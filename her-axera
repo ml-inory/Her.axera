@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# her-axera — 统一命令行入口
+#
+# 一键部署、启动、停止、状态查看。
+#
+# Usage:
+#   ./her-axera deploy             一键部署到 AX650 板端
+#   ./her-axera start              启动所有服务
+#   ./her-axera stop               停止所有服务
+#   ./her-axera status             查看服务状态
+#   ./her-axera logs               查看实时日志
+#   ./her-axera test               运行端到端验证
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${SCRIPT_DIR}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8080}"
+AXLLM_PORT="${AXLLM_PORT:-8000}"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+log()    { echo -e "${CYAN}[her-axera]${NC} $*"; }
+ok()     { echo -e "  ${GREEN}✓${NC} $*"; }
+err()    { echo -e "  ${RED}✗${NC} $*"; }
+
+health_check() {
+    curl -sf "http://127.0.0.1:${1}/health" >/dev/null 2>&1
+}
+
+usage() {
+    cat <<'EOF'
+her-axera — 爱芯 NPU 语音对话系统统一管理工具
+
+Usage:
+  ./her-axera <command> [options]
+
+Commands:
+  deploy    一键部署到 AX650 板端 (venv + deps + models + start)
+  start     启动所有服务 (ax-llm + backend)
+  stop      停止所有服务
+  restart   重启所有服务
+  status    查看服务运行状态
+  logs      查看实时日志 (ctrl-c 退出)
+  test      运行端到端验证 (smoke test)
+  help      显示此帮助
+
+Examples:
+  ./her-axera deploy --models speaker
+  ./her-axera start
+  ./her-axera status
+  ./her-axera test --host 192.168.1.100
+EOF
+}
+
+# ── deploy ────────────────────────────────────────────────────
+cmd_deploy() {
+    log "一键部署 Her.axera 到 AX650 板端..."
+    exec bash "${REPO_ROOT}/deploy.sh" "$@"
+}
+
+# ── start ─────────────────────────────────────────────────────
+cmd_start() {
+    log "启动服务..."
+
+    # Start ax-llm if available
+    if command -v axllm &>/dev/null; then
+        if health_check "${AXLLM_PORT}"; then
+            ok "ax-llm already running on :${AXLLM_PORT}"
+        else
+            log "starting ax-llm..."
+            nohup axllm serve --port "${AXLLM_PORT}" \
+                >"${REPO_ROOT}/backend/data/axllm.log" 2>&1 &
+            sleep 2
+            if health_check "${AXLLM_PORT}"; then
+                ok "ax-llm started on :${AXLLM_PORT}"
+            else
+                err "ax-llm failed to start"
+            fi
+        fi
+    else
+        log "axllm not found — skip"
+    fi
+
+    # Start backend
+    if health_check "${PORT}"; then
+        ok "backend already running on :${PORT}"
+    else
+        log "starting backend..."
+        cd "${REPO_ROOT}/backend"
+        source .env 2>/dev/null || true
+        nohup uvicorn app.main:app --host "${HOST}" --port "${PORT}" \
+            >"${REPO_ROOT}/backend/data/her-axera-backend.log" 2>&1 &
+        echo "$!" >"${REPO_ROOT}/backend/data/her-axera-backend.pid"
+        sleep 2
+        if health_check "${PORT}"; then
+            ok "backend started on :${PORT}"
+        else
+            err "backend failed to start — check backend/data/her-axera-backend.log"
+            return 1
+        fi
+    fi
+
+    echo ""
+    log "All services running:"
+    echo "  Backend : http://$(hostname -I 2>/dev/null | awk '{print $1}'):${PORT}"
+    echo "  Health  : http://127.0.0.1:${PORT}/health"
+    echo "  UI      : http://$(hostname -I 2>/dev/null | awk '{print $1}'):${PORT}/ui/"
+}
+
+# ── stop ──────────────────────────────────────────────────────
+cmd_stop() {
+    log "停止服务..."
+
+    # Stop backend
+    PID_FILE="${REPO_ROOT}/backend/data/her-axera-backend.pid"
+    if [[ -f "${PID_FILE}" ]]; then
+        PID=$(cat "${PID_FILE}")
+        if kill -0 "${PID}" 2>/dev/null; then
+            kill "${PID}"
+            ok "backend stopped (pid ${PID})"
+        fi
+        rm -f "${PID_FILE}"
+    fi
+
+    # Stop ax-llm
+    if pgrep -f "axllm serve" >/dev/null 2>&1; then
+        pkill -f "axllm serve" 2>/dev/null || true
+        ok "ax-llm stopped"
+    fi
+
+    log "All services stopped"
+}
+
+# ── restart ───────────────────────────────────────────────────
+cmd_restart() {
+    cmd_stop
+    sleep 1
+    cmd_start
+}
+
+# ── status ────────────────────────────────────────────────────
+cmd_status() {
+    echo "Her.axera Service Status"
+    echo "========================"
+    echo ""
+
+    # Backend
+    if health_check "${PORT}"; then
+        echo -e "  Backend  ${GREEN}● running${NC}  http://127.0.0.1:${PORT}"
+        HEALTH=$(curl -sf "http://127.0.0.1:${PORT}/health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "?")
+        echo "           health: ${HEALTH}"
+    else
+        echo -e "  Backend  ${RED}● stopped${NC}"
+    fi
+
+    # ax-llm
+    if health_check "${AXLLM_PORT}"; then
+        echo -e "  ax-llm   ${GREEN}● running${NC}  http://127.0.0.1:${AXLLM_PORT}"
+    else
+        echo -e "  ax-llm   ${RED}● stopped${NC}"
+    fi
+
+    # Systemd
+    echo ""
+    echo "Systemd:"
+    systemctl is-active her-axera-backend 2>/dev/null && echo "  her-axera-backend: active" || echo "  her-axera-backend: not installed"
+    systemctl is-active her-axera-axllm 2>/dev/null && echo "  her-axera-axllm: active" || echo "  her-axera-axllm: not installed"
+}
+
+# ── logs ──────────────────────────────────────────────────────
+cmd_logs() {
+    LOG_FILE="${REPO_ROOT}/backend/data/her-axera-backend.log"
+    AXLLM_LOG="${REPO_ROOT}/backend/data/axllm.log"
+
+    echo "Tailing logs (ctrl-c to exit)..."
+    tail -f "${LOG_FILE}" "${AXLLM_LOG}" 2>/dev/null || \
+    tail -f "${LOG_FILE}"
+}
+
+# ── test ──────────────────────────────────────────────────────
+cmd_test() {
+    exec bash "${REPO_ROOT}/scripts/smoke_test.sh" "$@"
+}
+
+# ── dispatch ──────────────────────────────────────────────────
+case "${1:-help}" in
+    deploy)   shift; cmd_deploy "$@" ;;
+    start)    cmd_start ;;
+    stop)     cmd_stop ;;
+    restart)  cmd_restart ;;
+    status)   cmd_status ;;
+    logs)     cmd_logs ;;
+    test)     shift; cmd_test "$@" ;;
+    help|--help|-h) usage ;;
+    *)        echo "Unknown command: ${1:-}" >&2; usage >&2; exit 1 ;;
+esac

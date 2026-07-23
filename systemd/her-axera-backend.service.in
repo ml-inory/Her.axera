@@ -1,7 +1,7 @@
 [Unit]
 Description=Her.axera AX650 backend
-After=network-online.target
-Wants=network-online.target
+After=network-online.target her-axera-axllm.service
+Wants=network-online.target her-axera-axllm.service
 
 [Service]
 Type=simple

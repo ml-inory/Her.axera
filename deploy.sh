@@ -14,8 +14,6 @@ PORT="${PORT:-8080}"
 VENV_SYSTEM_SITE_PACKAGES="${VENV_SYSTEM_SITE_PACKAGES:-0}"
 
 MODELS=()
-WITH_WENET=0
-WITH_FIRERED=0
 SKIP_MODELS=0
 SKIP_SERVICE=0
 FOREGROUND=0
@@ -29,14 +27,12 @@ Usage: ./deploy.sh [options]
 pip 安装、模型下载），后续运行秒级完成。
 
 Options:
-  --models "sensevoice kokoro speaker"   下载指定模型。
+  --models "speaker"   下载指定模型。
   --models all                           下载所有模型。
   --model-root PATH                      模型根目录。默认: /opt/models/her-axera
   --hf-endpoint URL                      Hugging Face 镜像。默认: https://hf-mirror.com
   --host HOST                            绑定地址。默认: 0.0.0.0
   --port PORT                            绑定端口。默认: 8080
-  --with-wenet-onnx                      安装 WeNet ONNX 依赖。
-  --with-fireredasr-aed                  安装 FireRedASR-AED 依赖。
   --system-site-packages                 venv 暴露板端系统 site-packages。
   --no-models                            跳过模型下载。
   --no-service                           跳过 systemd 服务安装。
@@ -55,8 +51,6 @@ while [[ $# -gt 0 ]]; do
     --hf-endpoint)   shift; HF_ENDPOINT="$1" ;;
     --host)          shift; HOST="$1" ;;
     --port)          shift; PORT="$1" ;;
-    --with-wenet-onnx)       WITH_WENET=1 ;;
-    --with-fireredasr-aed)   WITH_FIRERED=1 ;;
     --system-site-packages)  VENV_SYSTEM_SITE_PACKAGES=1 ;;
     --no-models)     SKIP_MODELS=1 ;;
     --no-service)    SKIP_SERVICE=1 ;;
@@ -167,29 +161,7 @@ PY
   fi
 fi
 
-# ── 4. optional extras ────────────────────────────────────────
-
-if [[ "${WITH_WENET}" -eq 1 ]]; then
-  if source_state "wenet_installed"; then
-    skip "wenet-onnx"
-  else
-    python -m pip install -r backend/requirements-wenet-onnx.txt -q
-    done_ "wenet-onnx installed"
-    mark_state "wenet_installed"
-  fi
-fi
-
-if [[ "${WITH_FIRERED}" -eq 1 ]]; then
-  if source_state "firered_installed"; then
-    skip "fireredasr-aed"
-  else
-    python -m pip install -r backend/requirements-fireredasr-aed.txt -q
-    done_ "fireredasr-aed installed"
-    mark_state "firered_installed"
-  fi
-fi
-
-# ── 5. models ─────────────────────────────────────────────────
+# ── 4. models ─────────────────────────────────────────────────
 
 if [[ "${SKIP_MODELS}" -eq 1 ]]; then
   skip "model download (--no-models)"
@@ -207,10 +179,35 @@ elif [[ "${#MODELS[@]}" -gt 0 ]]; then
     mark_state "models_downloaded"
   fi
 else
-  log "no models requested; use --models all or --models \"sensevoice kokoro speaker\""
+  log "no models requested; use --models speaker or --models all"
+fi
+
+
+# ── 5. ax-llm ─────────────────────────────────────────────────
+
+if [[ "${SKIP_AXLLM:-0}" -eq 0 ]]; then
+  AXLLM_PORT="${AXLLM_PORT:-8000}"
+  if command -v axllm &>/dev/null; then
+    if curl -s "http://127.0.0.1:${AXLLM_PORT}/health" >/dev/null 2>&1; then
+      skip "ax-llm already running on port ${AXLLM_PORT}"
+    else
+      log "starting ax-llm serve on port ${AXLLM_PORT}"
+      nohup axllm serve --port "${AXLLM_PORT}" >"${REPO_ROOT}/backend/data/axllm.log" 2>&1 &
+      for _ in $(seq 1 15); do
+        if curl -s "http://127.0.0.1:${AXLLM_PORT}/health" >/dev/null 2>&1; then
+          done_ "ax-llm healthy: http://127.0.0.1:${AXLLM_PORT}/health"
+          break
+        fi
+        sleep 1
+      done
+    fi
+  else
+    log "axllm not found — skipping local LLM. Set AX_LLM_API_BASE for remote fallback."
+  fi
 fi
 
 # ── 6. start backend ──────────────────────────────────────────
+ ──────────────────────────────────────────
 
 cd "${REPO_ROOT}/backend"
 mkdir -p data
