@@ -688,23 +688,22 @@ async function startRecording() {
   const audioContext = new AudioContext();
   const source = audioContext.createMediaStreamSource(stream);
   const processor = audioContext.createScriptProcessor(4096, 1, 1);
-  const turnId = `turn_${crypto.randomUUID()}`;
   const socket = openSocket();
-  state.currentTurnId = turnId;
-  sendWhenOpen(socket, { type: "speech_start", turn_id: turnId, input_sample_rate: audioContext.sampleRate, channels: 1, ...options() });
+  // Enter free talk mode — server handles VAD + utterance auto-split
+  sendWhenOpen(socket, { type: "free_talk_start", options: { input_sample_rate: audioContext.sampleRate, channels: 1, ...options() } });
   processor.onaudioprocess = (event) => {
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN) return;
     const channel = event.inputBuffer.getChannelData(0);
     state.waveform = new Float32Array(channel);
-    state.socket.send(JSON.stringify({ type: "audio_chunk", turn_id: turnId, audio_base64: pcm16ToBase64(floatToInt16(channel)) }));
+    state.socket.send(JSON.stringify({ type: "audio_chunk", audio_base64: pcm16ToBase64(floatToInt16(channel)) }));
   };
   source.connect(processor);
   processor.connect(audioContext.destination);
-  state.recorder = { stream, audioContext, source, processor, turnId };
+  state.recorder = { stream, audioContext, source, processor };
   els.recordButton.classList.add("recording");
-  els.recordButton.setAttribute("aria-label", "Stop recording");
-  setConnection("录音中", "busy");
-  setStatus("正在采集语音");
+  els.recordButton.setAttribute("aria-label", "停止自由说话");
+  setConnection("自由说话中", "busy");
+  setStatus("直接说话即可，自动识别");
 }
 
 function stopRecording() {
@@ -715,12 +714,13 @@ function stopRecording() {
   recorder.stream.getTracks().forEach(t => t.stop());
   recorder.audioContext.close();
   if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-    state.socket.send(JSON.stringify({ type: "speech_end", turn_id: recorder.turnId }));
+    state.socket.send(JSON.stringify({ type: "free_talk_end" }));
   }
   state.recorder = null;
   els.recordButton.classList.remove("recording");
-  els.recordButton.setAttribute("aria-label", "Start recording");
-  setStatus("正在提交语音");
+  els.recordButton.setAttribute("aria-label", "开始自由说话");
+  setConnection("已连接", "ok");
+  setStatus("自由说话已停止");
 }
 
 function sendText() {

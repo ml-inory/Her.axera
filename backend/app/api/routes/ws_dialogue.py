@@ -22,7 +22,13 @@ PARTIAL_ASR_THRESHOLD_MS = 2000
 
 # Barge-in: minimum consecutive speech chunks to trigger interruption during active TTS.
 BARGEIN_SPEECH_CHUNKS = 3
-BARGEIN_ENERGY_THRESHOLD = 500  # RMS energy threshold for 16-bit PCM
+BARGEIN_ENERGY_THRESHOLD = 500
+
+# Free Talk: VAD-based auto utterance detection.
+# Frames assumed to be ~20ms at 16kHz (320 samples per frame).
+FREE_TALK_SILENCE_FRAMES = 40   # ~800ms silence to trigger utterance end
+FREE_TALK_MIN_SPEECH_FRAMES = 15  # ~300ms minimum speech duration
+  # RMS energy threshold for 16-bit PCM
 
 
 
@@ -46,6 +52,12 @@ class ConnectionState:
         self.turn_options: dict[str, dict] = {}
         self.partial_sent: dict[str, bool] = {}
         self.bargein_counter: int = 0  # consecutive speech chunks during active TTS
+        # Free talk mode
+        self.free_talk: bool = False
+        self.free_talk_buffer: bytearray = bytearray()
+        self.free_talk_speech_frames: int = 0
+        self.free_talk_silence_frames: int = 0
+        self.free_talk_options: dict = {}
         self.send_lock = asyncio.Lock()
 
 
@@ -211,7 +223,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
         while True:
             request = await websocket.receive_json()
             message_type = request.get("type")
-            if message_type not in {"audio", "utterance", "text", "speech_start", "audio_chunk", "speech_end", "abort"}:
+            if message_type not in {"audio", "utterance", "text", "speech_start", "audio_chunk", "speech_end", "abort", "free_talk_start", "free_talk_end"}:
                 await websocket.send_json(
                     {
                         "type": "error",
@@ -227,6 +239,40 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     await cancel_active("client_abort")
                     await send_event({"type": "accepted", "trace_id": trace_id, "turn_id": turn_id})
                     continue
+                if message_type == "free_talk_start":
+                    state.free_talk = True
+                    state.free_talk_buffer = bytearray()
+                    state.free_talk_speech_frames = 0
+                    state.free_talk_silence_frames = 0
+                    state.free_talk_options = dict(request.get("options") or request)
+                    await cancel_active("free_talk")
+                    await send_event({
+                        "type": "free_talk_started",
+                        "trace_id": trace_id,
+                        "options": state.free_talk_options,
+                    })
+                    continue
+
+                if message_type == "free_talk_end":
+                    # Process any remaining speech before ending
+                    if state.free_talk and state.free_talk_speech_frames >= FREE_TALK_MIN_SPEECH_FRAMES:
+                        ft_turn_id = new_trace_id("turn")
+                        pcm = bytes(state.free_talk_buffer)
+                        sample_rate = int(state.free_talk_options.get("input_sample_rate") or 16000)
+                        channels = int(state.free_talk_options.get("channels") or 1)
+                        audio_content = _pcm_to_wav(pcm, sample_rate=sample_rate, channels=channels)
+                        await send_event({"type": "utterance_detected", "trace_id": trace_id, "turn_id": ft_turn_id})
+                        state.active_turn_id = ft_turn_id
+                        state.bargein_counter = 0
+                        state.active_task = asyncio.create_task(
+                            run_audio_pipeline(state.free_talk_options, trace_id, audio_content, ft_turn_id)
+                        )
+                    state.free_talk = False
+                    state.free_talk_buffer = bytearray()
+                    state.free_talk_speech_frames = 0
+                    state.free_talk_silence_frames = 0
+                    await send_event({"type": "free_talk_ended", "trace_id": trace_id})
+                    continue
 
                 if message_type == "speech_start":
                     await cancel_active("new_speech", replacement_turn_id=turn_id)
@@ -237,7 +283,53 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     await send_event({"type": "speech_started", "trace_id": trace_id, "turn_id": turn_id})
                     continue
 
+
                 if message_type == "audio_chunk":
+                    # Free talk mode: all chunks go to free_talk_buffer with VAD auto-split
+                    if state.free_talk:
+                        chunk_data = b64decode(str(request.get("audio_base64") or ""), validate=True)
+                        state.free_talk_buffer.extend(chunk_data)
+
+                        energy = _rms_energy(chunk_data)
+                        if energy >= BARGEIN_ENERGY_THRESHOLD:
+                            state.free_talk_speech_frames += 1
+                            state.free_talk_silence_frames = 0
+
+                            # Barge-in during free talk: cancel active pipeline
+                            if state.active_task and not state.active_task.done():
+                                state.bargein_counter += 1
+                                if state.bargein_counter >= BARGEIN_SPEECH_CHUNKS:
+                                    await cancel_active("barge_in")
+                                    state.bargein_counter = 0
+                        else:
+                            state.free_talk_silence_frames += 1
+
+                            # End of utterance: sufficient silence after speech
+                            if (state.free_talk_silence_frames >= FREE_TALK_SILENCE_FRAMES
+                                    and state.free_talk_speech_frames >= FREE_TALK_MIN_SPEECH_FRAMES):
+                                ft_turn_id = new_trace_id("turn")
+                                pcm = bytes(state.free_talk_buffer)
+                                sample_rate = int(state.free_talk_options.get("input_sample_rate") or 16000)
+                                channels = int(state.free_talk_options.get("channels") or 1)
+                                audio_content = _pcm_to_wav(pcm, sample_rate=sample_rate, channels=channels)
+
+                                await send_event({"type": "utterance_detected", "trace_id": trace_id, "turn_id": ft_turn_id})
+
+                                # Run pipeline for this utterance
+                                state.active_turn_id = ft_turn_id
+                                state.bargein_counter = 0
+                                state.active_task = asyncio.create_task(
+                                    run_audio_pipeline(state.free_talk_options, trace_id, audio_content, ft_turn_id)
+                                )
+
+                                # Reset buffer for next utterance
+                                state.free_talk_buffer = bytearray()
+                                state.free_talk_speech_frames = 0
+                                state.free_talk_silence_frames = 0
+
+                        continue
+
+                    # Legacy chunk mode (non-free-talk)
                     chunk_turn_id = str(request.get("turn_id") or "")
                     if chunk_turn_id not in state.buffers:
                         await send_event(
