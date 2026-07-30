@@ -8,6 +8,8 @@ from time import perf_counter
 from uuid import uuid4
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from app.core.config import get_settings
 from app.core.errors import AppError
@@ -80,6 +82,10 @@ class LLMService:
         self.sessions: dict[str, list[ChatMessage]] = {}
         self._session_meta: dict[str, dict] = {}  # {session_id: {title, created_at, last_active, user_id}}
         self.jobs: dict[str, LLMJobResponse] = {}
+        self._http = requests.Session()
+        adapter = HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=Retry(total=2, backoff_factor=0.1))
+        self._http.mount("https://", adapter)
+        self._http.mount("http://", adapter)
         self._load_sessions()
 
     def _should_register_ax_llm(self) -> bool:
@@ -394,7 +400,7 @@ class LLMService:
         api_base, api_key, model = self._resolve_api(provider_name, request)
         payload = self._build_payload(request, model or selected_model)
         try:
-            response = requests.post(
+            response = self._http.post(
                 f"{api_base}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload, timeout=self.settings.llm_request_timeout,

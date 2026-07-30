@@ -112,7 +112,7 @@ class AXASRProvider:
 
     # ── Internal ───────────────────────────────────────────────
 
-    @property
+    
 
     @property
     def asr(self):

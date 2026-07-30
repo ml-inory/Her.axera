@@ -23,13 +23,14 @@ PARTIAL_ASR_THRESHOLD_MS = 2000
 
 # Barge-in: minimum consecutive speech chunks to trigger interruption during active TTS.
 BARGEIN_SPEECH_CHUNKS = 3
-BARGEIN_ENERGY_THRESHOLD = 500
+BARGEIN_ENERGY_THRESHOLD = 300
 
 # Free Talk: VAD-based auto utterance detection.
-# Frames assumed to be ~20ms at 16kHz (320 samples per frame).
-FREE_TALK_SILENCE_FRAMES = 40   # ~800ms silence to trigger utterance end
-FREE_TALK_MIN_SPEECH_FRAMES = 15  # ~300ms minimum speech duration
-  # RMS energy threshold for 16-bit PCM
+# Now time-based (ms): frames calculated dynamically from actual chunk duration.
+FREE_TALK_SILENCE_MS = 800       # silence threshold to trigger utterance end
+FREE_TALK_MIN_SPEECH_MS = 300    # minimum speech duration
+# ScriptProcessor chunk size (frontend hardcoded)
+AUDIO_CHUNK_SAMPLES = 4096
 
 
 
@@ -247,11 +248,6 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     state.free_talk_silence_frames = 0
                     state.free_talk_options = dict(request.get("options") or request)
                     await cancel_active("free_talk")
-                                        # Initialize streaming ASR for real-time partial results
-                    try:
-                        asr_service.ax_asr_provider.stream_init()
-                    except Exception:
-                        pass  # streaming not available, fall back to batch mode
                     await send_event({
                         "type": "free_talk_started",
                         "trace_id": trace_id,
@@ -261,7 +257,10 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
 
                 if message_type == "free_talk_end":
                     # Process any remaining speech before ending
-                    if state.free_talk and state.free_talk_speech_frames >= FREE_TALK_MIN_SPEECH_FRAMES:
+                    input_sr_end = int(state.free_talk_options.get("input_sample_rate") or 16000)
+                    chunk_dur_end = AUDIO_CHUNK_SAMPLES * 1000 / input_sr_end
+                    min_speech_end = max(1, int(FREE_TALK_MIN_SPEECH_MS / chunk_dur_end))
+                    if state.free_talk and state.free_talk_speech_frames >= min_speech_end:
                         ft_turn_id = new_trace_id("turn")
                         pcm = bytes(state.free_talk_buffer)
                         sample_rate = int(state.free_talk_options.get("input_sample_rate") or 16000)
@@ -296,21 +295,18 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                         chunk_data = b64decode(str(request.get("audio_base64") or ""), validate=True)
                         state.free_talk_buffer.extend(chunk_data)
 
-                        # Streaming ASR: feed chunk for real-time partial results
-                        try:
-                            partial = asr_service.ax_asr_provider.stream_feed(chunk_data, input_sr)
-                            if partial:
-                                options = state.free_talk_options
-                                await send_event({
-                                    "type": "asr_partial",
-                                    "trace_id": trace_id,
-                                    "text": partial,
-                                    "turn_id": "streaming",
-                                })
-                        except Exception:
-                            pass  # streaming not available
+                        # Calculate dynamic VAD thresholds from actual sample rate
+                        input_sr = int(state.free_talk_options.get("input_sample_rate") or 16000)
+                        chunk_duration_ms = AUDIO_CHUNK_SAMPLES * 1000 / input_sr
+                        silence_frames_needed = max(1, int(FREE_TALK_SILENCE_MS / chunk_duration_ms))
+                        min_speech_frames_needed = max(1, int(FREE_TALK_MIN_SPEECH_MS / chunk_duration_ms))
 
+                        # Streaming ASR disabled for free_talk: chunk-level partials are too noisy.
+                        # Batch ASR runs on the full utterance after VAD triggers utterance_detected.
                         energy = _rms_energy(chunk_data)
+                        logger.info("VAD energy=%.0f speech_frames=%d silence_frames=%d (need %d silence, %d speech, chunk=%.0fms)",
+                                     energy, state.free_talk_speech_frames, state.free_talk_silence_frames,
+                                     silence_frames_needed, min_speech_frames_needed, chunk_duration_ms)
                         if energy >= BARGEIN_ENERGY_THRESHOLD:
                             state.free_talk_speech_frames += 1
                             state.free_talk_silence_frames = 0
@@ -325,8 +321,8 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                             state.free_talk_silence_frames += 1
 
                             # End of utterance: sufficient silence after speech
-                            if (state.free_talk_silence_frames >= FREE_TALK_SILENCE_FRAMES
-                                    and state.free_talk_speech_frames >= FREE_TALK_MIN_SPEECH_FRAMES):
+                            if (state.free_talk_silence_frames >= silence_frames_needed
+                                    and state.free_talk_speech_frames >= min_speech_frames_needed):
                                 ft_turn_id = new_trace_id("turn")
                                 pcm = bytes(state.free_talk_buffer)
                                 sample_rate = int(state.free_talk_options.get("input_sample_rate") or 16000)
@@ -343,11 +339,6 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                                 )
 
                                 # Reset buffer for next utterance
-                                # Reset streaming ASR for next utterance
-                                try:
-                                    asr_service.ax_asr_provider.stream_reset()
-                                except Exception:
-                                    pass
                                 state.free_talk_buffer = bytearray()
                                 state.free_talk_speech_frames = 0
                                 state.free_talk_silence_frames = 0

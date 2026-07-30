@@ -78,14 +78,58 @@ class ModelDownloadState:
 
 
 def _build_model_specs() -> dict[str, ModelDownloadSpec]:
+    # Use actual ax_tts_api model path, not her-axera subdirectory
+    tts_model_root = Path(os.environ.get("AX_TTS_MODEL_PATH", "/root/models/ax_tts_api/models-ax650/kokoro"))
+    asr_model_root = Path(os.environ.get("AX_ASR_MODEL_PATH", "/opt/models/ax_asr_api/models-ax650"))
+    
     model_root = Path(os.environ.get("HER_AXERA_MODEL_ROOT", "/root/models/her-axera"))
     asr_root = model_root / "asr"
     tts_root = model_root / "tts"
 
     specs: dict[str, ModelDownloadSpec] = {}
 
+    # --- TTS Models (check actual path first) ---
+    tts_model_dir = str(tts_model_root)
+    tts_required = [
+        str(tts_model_root / "kokoro_enc_axera.axmodel"),
+        str(tts_model_root / "kokoro_f0n.axmodel"),
+        str(tts_model_root / "kokoro_dec.axmodel"),
+        str(tts_model_root / "kokoro_har_noup.onnx"),
+        str(tts_model_root / "kokoro_istft.onnx"),
+    ]
+    specs["tts_kokoro"] = ModelDownloadSpec(
+        key="tts_kokoro",
+        display_name="Kokoro TTS Models",
+        repo_id="inoryQwQ/kokoro.best",
+        source="huggingface",
+        allow_patterns=[
+            "models/kokoro_enc_axera.axmodel",
+            "models/kokoro_f0n.axmodel",
+            "models/kokoro_dec.axmodel",
+            "models/kokoro_har_noup.onnx",
+            "models/kokoro_istft.onnx",
+        ],
+        local_dir=tts_model_dir,
+        required_files=tts_required,
+        model_type="tts",
+        strip_prefix="models/",
+    )
 
-
+    # --- ASR Models ---
+    # SenseVoice: model is at AX_ASR_MODEL_PATH/sensevoice/sensevoice.axmodel
+    asr_required = [
+        str(asr_model_root / "sensevoice" / "sensevoice.axmodel"),
+    ]
+    specs["asr_sensevoice"] = ModelDownloadSpec(
+        key="asr_sensevoice",
+        display_name="SenseVoice ASR Model",
+        repo_id="AXERA-TECH/sensevoice.axera",
+        source="huggingface",
+        allow_patterns=["*.axmodel"],
+        local_dir=str(asr_model_root),
+        required_files=asr_required,
+        model_type="asr",
+    )
 
     return specs
 
@@ -132,8 +176,10 @@ class ModelDownloadManager:
                     new_states[key] = ModelDownloadState(spec=spec)
             self._states = new_states
         new_root = Path(root)
-        os.environ["AX_ASR_MODEL_PATH"] = str(new_root / "asr")
-        os.environ["AX_TTS_MODEL_PATH"] = str(new_root / "tts")
+        # Note: model_root change does not affect AX_TTS_MODEL_PATH / AX_ASR_MODEL_PATH
+        # Those are controlled by their respective env vars
+        # Note: model_root change does not affect AX_TTS_MODEL_PATH / AX_ASR_MODEL_PATH
+        # Those are controlled by their respective env vars
         logger.info("Model root changed to %s", root)
 
     def get_state(self, key: str) -> ModelDownloadState | None:
@@ -197,9 +243,13 @@ class ModelDownloadManager:
     def _init_states(self) -> None:
         for key, spec in self.specs.items():
             state = ModelDownloadState(spec=spec)
-            if spec.required_files and all(Path(f).exists() for f in spec.required_files):
-                state.status = DownloadStatus.DOWNLOADED
-                state.progress_pct = 100.0
+            if spec.required_files:
+                missing = [f for f in spec.required_files if not Path(f).exists()]
+                if not missing:
+                    state.status = DownloadStatus.DOWNLOADED
+                    state.progress_pct = 100.0
+                else:
+                    logger.info("Model %s: missing %d files (e.g. %s)", key, len(missing), missing[0] if missing else "")
             self._states[key] = state
 
     def _download_thread(self, key: str, cancel: threading.Event) -> None:

@@ -1,4 +1,13 @@
 console.log("app.js v2.3 - replay fix");
+
+// ===== Auto-redirect HTTP → HTTPS (required for getUserMedia) =====
+(function() {
+  if (location.protocol === "http:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+    const httpsUrl = "https://" + location.hostname + ":8443" + location.pathname + location.search + location.hash;
+    console.log("Redirecting to HTTPS for microphone support:", httpsUrl);
+    location.replace(httpsUrl);
+  }
+})();
 // ===== Her.axera Frontend =====
 // Onboarding wizard → model download → chat interface
 
@@ -7,7 +16,7 @@ const DEFAULTS = {
   asr: ["mock_asr", "ax_asr", "wenet_onnx", "sensevoice"],
   llm: ["mock_llm", "deepseek", "openai_compat"],
   tts: ["mock_tts", "ax_tts", "edge_tts", "kokoro"],
-  voices: ["af_heart", "zf_xiaoxiao", "zh-CN-XiaoxiaoNeural", "female_default", "male_default"],
+  voices: ["zf_xiaoxiao", "zf_xiaobei", "zm_yunxi", "af_heart", "bf_emma", "jf_alpha", "zh-CN-XiaoxiaoNeural", "female_default", "male_default"],
 };
 
 const MODEL_SPECS = [
@@ -443,7 +452,7 @@ function initControls() {
   fillSelect(els.asrProvider, DEFAULTS.asr, "sensevoice");
   fillSelect(els.llmProvider, DEFAULTS.llm, "deepseek");
   fillSelect(els.ttsProvider, DEFAULTS.tts, "edge_tts");
-  fillSelect(els.voice, DEFAULTS.voices, "af_heart");
+  fillSelect(els.voice, DEFAULTS.voices, "zf_xiaoxiao");
 }
 
 async function loadProviders() {
@@ -583,6 +592,19 @@ function handleMessage(msg) {
         if (!state.audioPlaying) playNextAudio();
       }
       break;
+    case "free_talk_started":
+      setStatus("自由说话中...");
+      break;
+    case "free_talk_ended":
+      setStatus("待机");
+      break;
+    case "utterance_detected":
+      setStatus("检测到语音，识别中...");
+      addEvent("utterance", "检测到语音断句");
+      break;
+    case "asr_partial":
+      setStatus("识别中: " + (msg.text || ""));
+      break;
     case "done":
       console.log("DONE event, audio blobs:", state.currentResponseAudio.length, "assistantNode:", !!state.assistantNode);
       els.totalMetric.textContent = `${msg.total_ms ?? "?"} ms`;
@@ -681,7 +703,16 @@ function pcm16ToBase64(pcm) {
 }
 
 async function startRecording() {
-  stopAudio(); state.currentResponseAudio = []; state.lastAssistantNode = null; state.streamingReceived = false;
+  // Check for secure context (required by browsers for getUserMedia)
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setConnection("需要 HTTPS", "error");
+    setStatus("请通过 https://192.168.31.201:8443/ui/ 访问以启用麦克风");
+    addEvent("error", "麦克风不可用: 非安全上下文。请通过 HTTPS 访问。");
+    return;
+  }
+  stopAudio(); state.currentResponseAudio = []; state.lastAssistantNode = null; state.assistantNode = null; state.streamingReceived = false;
+  // Close old WebSocket to prevent stale done events from clearing new assistantNode
+  if (state.socket) { try { state.socket.close(); } catch(_) {} state.socket = null; }
   resetMetrics();
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -727,7 +758,9 @@ function stopRecording() {
 function sendText() {
   const text = els.textInput.value.trim();
   if (!text) return;
-  stopAudio(); state.currentResponseAudio = []; state.lastAssistantNode = null; state.streamingReceived = false;
+  stopAudio(); state.currentResponseAudio = []; state.lastAssistantNode = null; state.assistantNode = null; state.streamingReceived = false;
+  // Close old WebSocket to prevent stale done events from clearing new assistantNode
+  if (state.socket) { try { state.socket.close(); } catch(_) {} state.socket = null; }
   resetMetrics();
   addMessage("user", text);
   els.textInput.value = "";
