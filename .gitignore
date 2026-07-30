@@ -1,3 +1,7 @@
 storage/
 .build-state.json
 .tdd-state.json
+node_modules/
+sdk/her_axera_sdk/__pycache__/
+test-results/
+__pycache__/
