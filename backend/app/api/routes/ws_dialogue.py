@@ -13,6 +13,7 @@ from app.core.tracing import new_trace_id
 from app.services.asr_service import asr_service
 from app.services.asr_service import asr_service
 from app.services.dialogue_service import dialogue_service
+from app.services.streaming_vad import StreamingSileroVAD
 from app.services.wakeword_service import wakeword_service
 
 router = APIRouter(tags=["dialogue-websocket"])
@@ -25,17 +26,6 @@ PARTIAL_ASR_THRESHOLD_MS = 2000
 # Barge-in: minimum consecutive speech chunks to trigger interruption during active TTS.
 BARGEIN_SPEECH_CHUNKS = 3
 BARGEIN_ENERGY_THRESHOLD = 300
-
-# Free Talk: VAD-based auto utterance detection.
-# Now time-based (ms): frames calculated dynamically from actual chunk duration.
-FREE_TALK_SILENCE_MS = 800       # silence threshold to trigger utterance end
-FREE_TALK_MIN_SPEECH_MS = 300    # minimum speech duration
-# ScriptProcessor chunk size (frontend hardcoded)
-AUDIO_CHUNK_SAMPLES = 4096
-
-
-
-
 
 def _rms_energy(pcm_chunk: bytes) -> float:
     """Calculate RMS energy of a 16-bit PCM audio chunk."""
@@ -58,10 +48,8 @@ class ConnectionState:
         self.bargein_counter: int = 0  # consecutive speech chunks during active TTS
         # Free talk mode
         self.free_talk: bool = False
-        self.free_talk_buffer: bytearray = bytearray()
-        self.free_talk_speech_frames: int = 0
-        self.free_talk_silence_frames: int = 0
         self.free_talk_options: dict = {}
+        self.streaming_vad: StreamingSileroVAD | None = None
         self.send_lock = asyncio.Lock()
 
 
@@ -259,10 +247,8 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     continue
                 if message_type == "free_talk_start":
                     state.free_talk = True
-                    state.free_talk_buffer = bytearray()
-                    state.free_talk_speech_frames = 0
-                    state.free_talk_silence_frames = 0
                     state.free_talk_options = dict(request.get("options") or request)
+                    state.streaming_vad = StreamingSileroVAD()
                     await cancel_active("free_talk")
                     await send_event({
                         "type": "free_talk_started",
@@ -272,26 +258,20 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     continue
 
                 if message_type == "free_talk_end":
-                    # Process any remaining speech before ending
-                    input_sr_end = int(state.free_talk_options.get("input_sample_rate") or 16000)
-                    chunk_dur_end = AUDIO_CHUNK_SAMPLES * 1000 / input_sr_end
-                    min_speech_end = max(1, int(FREE_TALK_MIN_SPEECH_MS / chunk_dur_end))
-                    if state.free_talk and state.free_talk_speech_frames >= min_speech_end:
-                        ft_turn_id = new_trace_id("turn")
-                        pcm = bytes(state.free_talk_buffer)
-                        sample_rate = int(state.free_talk_options.get("input_sample_rate") or 16000)
-                        channels = int(state.free_talk_options.get("channels") or 1)
-                        audio_content = _pcm_to_wav(pcm, sample_rate=sample_rate, channels=channels)
-                        await send_event({"type": "utterance_detected", "trace_id": trace_id, "turn_id": ft_turn_id})
-                        state.active_turn_id = ft_turn_id
-                        state.bargein_counter = 0
-                        state.active_task = asyncio.create_task(
-                            run_audio_pipeline(state.free_talk_options, trace_id, audio_content, ft_turn_id)
-                        )
+                    # Process any remaining speech before ending.
+                    if state.free_talk and state.streaming_vad is not None:
+                        flushed = state.streaming_vad.flush()
+                        if flushed.utterance_pcm:
+                            ft_turn_id = new_trace_id("turn")
+                            audio_content = _pcm_to_wav(flushed.utterance_pcm, sample_rate=16000)
+                            await send_event({"type": "utterance_detected", "trace_id": trace_id, "turn_id": ft_turn_id})
+                            state.active_turn_id = ft_turn_id
+                            state.bargein_counter = 0
+                            state.active_task = asyncio.create_task(
+                                run_audio_pipeline(state.free_talk_options, trace_id, audio_content, ft_turn_id)
+                            )
                     state.free_talk = False
-                    state.free_talk_buffer = bytearray()
-                    state.free_talk_speech_frames = 0
-                    state.free_talk_silence_frames = 0
+                    state.streaming_vad = None
                     await send_event({"type": "free_talk_ended", "trace_id": trace_id})
                     continue
 
@@ -306,59 +286,33 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
 
 
                 if message_type == "audio_chunk":
-                    # Free talk mode: all chunks go to free_talk_buffer with VAD auto-split
+                    # Free talk mode: streaming Silero VAD auto-splits utterances.
                     if state.free_talk:
                         chunk_data = b64decode(str(request.get("audio_base64") or ""), validate=True)
-                        state.free_talk_buffer.extend(chunk_data)
-
-                        # Calculate dynamic VAD thresholds from actual sample rate
                         input_sr = int(state.free_talk_options.get("input_sample_rate") or 16000)
-                        chunk_duration_ms = AUDIO_CHUNK_SAMPLES * 1000 / input_sr
-                        silence_frames_needed = max(1, int(FREE_TALK_SILENCE_MS / chunk_duration_ms))
-                        min_speech_frames_needed = max(1, int(FREE_TALK_MIN_SPEECH_MS / chunk_duration_ms))
+                        if state.streaming_vad is None:
+                            state.streaming_vad = StreamingSileroVAD()
+                        result = state.streaming_vad.feed(chunk_data, input_sr)
 
-                        # Streaming ASR disabled for free_talk: chunk-level partials are too noisy.
-                        # Batch ASR runs on the full utterance after VAD triggers utterance_detected.
-                        energy = _rms_energy(chunk_data)
-                        logger.info("VAD energy=%.0f speech_frames=%d silence_frames=%d (need %d silence, %d speech, chunk=%.0fms)",
-                                     energy, state.free_talk_speech_frames, state.free_talk_silence_frames,
-                                     silence_frames_needed, min_speech_frames_needed, chunk_duration_ms)
-                        if energy >= BARGEIN_ENERGY_THRESHOLD:
-                            state.free_talk_speech_frames += 1
-                            state.free_talk_silence_frames = 0
-
-                            # Barge-in during free talk: cancel active pipeline
-                            if state.active_task and not state.active_task.done():
-                                state.bargein_counter += 1
-                                if state.bargein_counter >= BARGEIN_SPEECH_CHUNKS:
-                                    await cancel_active("barge_in")
-                                    state.bargein_counter = 0
-                        else:
-                            state.free_talk_silence_frames += 1
-
-                            # End of utterance: sufficient silence after speech
-                            if (state.free_talk_silence_frames >= silence_frames_needed
-                                    and state.free_talk_speech_frames >= min_speech_frames_needed):
-                                ft_turn_id = new_trace_id("turn")
-                                pcm = bytes(state.free_talk_buffer)
-                                sample_rate = int(state.free_talk_options.get("input_sample_rate") or 16000)
-                                channels = int(state.free_talk_options.get("channels") or 1)
-                                audio_content = _pcm_to_wav(pcm, sample_rate=sample_rate, channels=channels)
-
-                                await send_event({"type": "utterance_detected", "trace_id": trace_id, "turn_id": ft_turn_id})
-
-                                # Run pipeline for this utterance
-                                state.active_turn_id = ft_turn_id
+                        # Barge-in during free talk: cancel the active pipeline
+                        # while the user keeps talking (VAD-driven).
+                        if result.speech_active and state.active_task and not state.active_task.done():
+                            state.bargein_counter += 1
+                            if state.bargein_counter >= BARGEIN_SPEECH_CHUNKS:
+                                await cancel_active("barge_in")
                                 state.bargein_counter = 0
-                                state.active_task = asyncio.create_task(
-                                    run_audio_pipeline(state.free_talk_options, trace_id, audio_content, ft_turn_id)
-                                )
+                        else:
+                            state.bargein_counter = max(0, state.bargein_counter - 1)
 
-                                # Reset buffer for next utterance
-                                state.free_talk_buffer = bytearray()
-                                state.free_talk_speech_frames = 0
-                                state.free_talk_silence_frames = 0
-
+                        if result.utterance_pcm:
+                            ft_turn_id = new_trace_id("turn")
+                            audio_content = _pcm_to_wav(result.utterance_pcm, sample_rate=16000)
+                            await send_event({"type": "utterance_detected", "trace_id": trace_id, "turn_id": ft_turn_id})
+                            state.active_turn_id = ft_turn_id
+                            state.bargein_counter = 0
+                            state.active_task = asyncio.create_task(
+                                run_audio_pipeline(state.free_talk_options, trace_id, audio_content, ft_turn_id)
+                            )
                         continue
 
                     # Legacy chunk mode (non-free-talk)
