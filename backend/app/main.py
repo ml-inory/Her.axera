@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import asr, health, llm, models, openai_compat, sessions, speakers, system, system_prompt, tts, users, wakewords, ws_dialogue
+from app.api.routes import asr, health, llm, models, openai_compat, realtime, sessions, speakers, system, system_prompt, tts, users, wakewords, ws_dialogue
 from app.core.config import get_settings
 from app.core.security import RateLimitMiddleware, TokenAuthMiddleware
 from app.core.errors import AppError, app_error_handler
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(users.router, prefix=settings.api_prefix)
     app.include_router(wakewords.router, prefix=settings.api_prefix)
     app.include_router(ws_dialogue.router, prefix=settings.api_prefix)
+    app.include_router(realtime.router, prefix=settings.api_prefix)
     app.include_router(sessions.router, prefix=settings.api_prefix)
     app.include_router(models.router, prefix=settings.api_prefix)
 

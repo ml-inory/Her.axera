@@ -16,6 +16,7 @@ from app.services.llm_service import llm_service
 from app.services.speaker_service import speaker_service
 from app.core.errors import AppError
 from app.services.tts_service import tts_service
+from app.services.tool_registry import tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ EMOTION_PROMPT_SUFFIX = "\n\n在每次回复开头用 [emotion:XXX] 标签表示
 
 STREAMING_CHUNK_MIN = 4
 STREAMING_CHUNK_MAX = 60
+MAX_TOOL_ROUNDS = 3
 
 
 def _parse_emotion(text: str) -> tuple[str | None, str]:
@@ -118,6 +120,39 @@ def _extract_complete_sentences(buffer: str, max_chars: int = 80) -> tuple[list[
 class DialogueService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._active_sessions: dict[str, dict[str, object]] = {}
+
+    # ------------------------------------------------------------------
+    # Session isolation & diagnostics
+    # ------------------------------------------------------------------
+
+    def _session_lock(self, session_id: str) -> asyncio.Lock:
+        return self._session_locks.setdefault(session_id, asyncio.Lock())
+
+    def _mark_active(self, session_id: str) -> None:
+        info = self._active_sessions.setdefault(session_id, {"conns": 0, "tasks": 0, "last_active": 0.0})
+        info["tasks"] = int(info["tasks"]) + 1
+        info["last_active"] = perf_counter()
+
+    def _mark_idle(self, session_id: str) -> None:
+        info = self._active_sessions.get(session_id)
+        if info:
+            info["tasks"] = max(0, int(info["tasks"]) - 1)
+            if info["tasks"] == 0:
+                self._active_sessions.pop(session_id, None)
+
+    def session_diagnostics(self) -> list[dict[str, object]]:
+        """Snapshot of currently active dialogue sessions (for /v1/dialogue/sessions)."""
+        now = perf_counter()
+        return [
+            {
+                "session_id": sid,
+                "active_tasks": info["tasks"],
+                "last_active_s": round(now - float(info["last_active"]), 2),
+            }
+            for sid, info in sorted(self._active_sessions.items())
+        ]
 
     async def _streaming_llm_tts(
         self,
@@ -138,118 +173,30 @@ class DialogueService:
         sample_rate: int,
         output_audio_codec: str = "pcm",
     ) -> AsyncIterator[dict[str, object]]:
-        """Stream LLM tokens, detect sentence boundaries, synthesize TTS per sentence."""
+        """Stream LLM tokens, detect sentence boundaries, synthesize TTS per sentence.
+
+        When function calling is enabled, built-in tools are executed server-side
+        and the final text-only response is spoken (tool rounds stay silent).
+        """
         use_opus = output_audio_codec == "opus" and opus_available()
         history = llm_service.sessions.get(session_id, [])
-        llm_request = ChatCompletionRequest(
-            messages=[
-                ChatMessage(role="system", content=effective_system_prompt),
-                *history[-10:],
-                user_message,
-            ],
-            session_id=None,
-            user_id=user_id,
-            provider=llm_provider,
-            api_key=llm_api_key,
-            model=llm_model,
-            temperature=0.7,
-            top_p=0.9,
-            max_tokens=512,
-        )
+        use_tools = self.settings.enable_function_calling and bool(tool_registry.names)
+        tools = tool_registry.get_schemas() if use_tools else []
+        base_messages = [
+            ChatMessage(role="system", content=effective_system_prompt),
+            *history[-10:],
+        ]
+        round_messages: list[ChatMessage] = []
 
-        llm_start = perf_counter()
-        full_content = ""
-        buffer = ""
-        sentence_index = 0
-        first_token_yielded = False
-
-        async for token in llm_service.chat_stream(trace_id, llm_request):
-            full_content += token
-            buffer += token
-
-            if not first_token_yielded:
-                first_token_yielded = True
-                yield {
-                    "type": "llm_started",
-                    "trace_id": trace_id,
-                    "session_id": session_id,
-                }
-
-            # Stream to TTS: flush clauses and short chunks for low latency
-            sentences, buffer = _extract_streaming_chunks(buffer)
-            for sentence in sentences:
-                yield {
-                    "type": "llm_delta",
-                    "trace_id": trace_id,
-                    "session_id": session_id,
-                    "text": sentence,
-                    "index": sentence_index,
-                }
-                try:
-                    tts_response = await tts_service.synthesize(
-                        trace_id,
-                        SpeechRequest(
-                            text=_clean_for_tts(sentence),
-                            provider=tts_provider,
-                            model=tts_model,
-                            voice=voice,
-                            language=selected_language,
-                            audio_format=output_audio_format,
-                            sample_rate=sample_rate,
-                            return_audio_base64=True,
-                        ),
-                    )
-                except AppError as exc:
-                    logger.error("TTS synthesis failed for sentence #%d: %s", sentence_index, exc.message)
-                    yield {
-                        "type": "error",
-                        "trace_id": trace_id,
-                        "session_id": session_id,
-                        "error": {"code": exc.code, "message": exc.message, "stage": "tts", "retryable": exc.retryable},
-                    }
-                    continue
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("TTS synthesis failed for sentence #%d: %s", sentence_index, exc)
-                    continue
-                audio_b64 = tts_response.audio_base64 or ""
-                audio_fmt = tts_response.audio_format
-                if use_opus and audio_b64:
-                    try:
-                        pcm_data = b64decode(audio_b64)
-                        opus_data = pcm_to_opus(pcm_data, sample_rate=tts_response.sample_rate or sample_rate)
-                        audio_b64 = b64encode(opus_data).decode("ascii")
-                        audio_fmt = "opus"
-                    except Exception:  # noqa: BLE001
-                        logger.debug("Opus conversion failed for sentence #%d, using original format", sentence_index)
-                yield {
-                    "type": "tts_sentence",
-                    "trace_id": trace_id,
-                    "session_id": session_id,
-                    "index": sentence_index,
-                    "text": sentence,
-                    "provider": tts_response.provider,
-                    "model": tts_response.model,
-                    "voice": tts_response.voice,
-                    "audio_format": audio_fmt,
-                    "sample_rate": tts_response.sample_rate,
-                    "duration_ms": tts_response.duration_ms,
-                    "processing_ms": tts_response.processing_ms,
-                    "audio_base64": audio_b64,
-                }
-                sentence_index += 1
-
-        # Process remaining buffer after LLM finishes.
-        remaining = buffer.strip()
-        if remaining:
-            sentences_final = split_sentences(remaining)
-            for sentence in sentences_final:
-                yield {
-                    "type": "llm_delta",
-                    "trace_id": trace_id,
-                    "session_id": session_id,
-                    "text": sentence,
-                    "index": sentence_index,
-                }
+        async def _emit_tts(sentence: str, index: int) -> AsyncIterator[dict[str, object]]:
+            yield {
+                "type": "llm_delta",
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "text": sentence,
+                "index": index,
+            }
+            try:
                 tts_response = await tts_service.synthesize(
                     trace_id,
                     SpeechRequest(
@@ -263,31 +210,136 @@ class DialogueService:
                         return_audio_base64=True,
                     ),
                 )
-                audio_b64 = tts_response.audio_base64 or ""
-                audio_fmt = tts_response.audio_format
-                if use_opus and audio_b64:
-                    try:
-                        pcm_data = b64decode(audio_b64)
-                        opus_data = pcm_to_opus(pcm_data, sample_rate=tts_response.sample_rate or sample_rate)
-                        audio_b64 = b64encode(opus_data).decode("ascii")
-                        audio_fmt = "opus"
-                    except Exception:  # noqa: BLE001
-                        pass
+            except AppError as exc:
+                logger.error("TTS synthesis failed for sentence #%d: %s", index, exc.message)
                 yield {
-                    "type": "tts_sentence",
+                    "type": "error",
                     "trace_id": trace_id,
                     "session_id": session_id,
-                    "index": sentence_index,
-                    "text": sentence,
-                    "provider": tts_response.provider,
-                    "model": tts_response.model,
-                    "voice": tts_response.voice,
-                    "audio_format": audio_fmt,
-                    "sample_rate": tts_response.sample_rate,
-                    "duration_ms": tts_response.duration_ms,
-                    "processing_ms": tts_response.processing_ms,
-                    "audio_base64": audio_b64,
+                    "error": {"code": exc.code, "message": exc.message, "stage": "tts", "retryable": exc.retryable},
                 }
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.error("TTS synthesis failed for sentence #%d: %s", index, exc)
+                return
+            audio_b64 = tts_response.audio_base64 or ""
+            audio_fmt = tts_response.audio_format
+            if use_opus and audio_b64:
+                try:
+                    pcm_data = b64decode(audio_b64)
+                    opus_data = pcm_to_opus(pcm_data, sample_rate=tts_response.sample_rate or sample_rate)
+                    audio_b64 = b64encode(opus_data).decode("ascii")
+                    audio_fmt = "opus"
+                except Exception:  # noqa: BLE001
+                    logger.debug("Opus conversion failed for sentence #%d, using original format", index)
+            yield {
+                "type": "tts_sentence",
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "index": index,
+                "text": sentence,
+                "provider": tts_response.provider,
+                "model": tts_response.model,
+                "voice": tts_response.voice,
+                "audio_format": audio_fmt,
+                "sample_rate": tts_response.sample_rate,
+                "duration_ms": tts_response.duration_ms,
+                "processing_ms": tts_response.processing_ms,
+                "audio_base64": audio_b64,
+            }
+
+        llm_start = perf_counter()
+        full_content = ""
+        buffer = ""
+        sentence_index = 0
+        first_token_yielded = False
+        final_text = ""
+
+        for _round in range(MAX_TOOL_ROUNDS + 1):
+            llm_request = ChatCompletionRequest(
+                messages=[*base_messages, *round_messages, user_message],
+                session_id=None,
+                user_id=user_id,
+                provider=llm_provider,
+                api_key=llm_api_key,
+                model=llm_model,
+                temperature=0.7,
+                top_p=0.9,
+                max_tokens=512,
+                tools=tools,
+                tool_choice="auto" if tools else None,
+            )
+            text_parts: list[str] = []
+            tool_calls = []
+            finish_reason: str | None = None
+
+            async for chunk in llm_service.chat_stream_detailed(trace_id, llm_request):
+                if chunk.tool_calls:
+                    tool_calls = chunk.tool_calls
+                if chunk.finish_reason:
+                    finish_reason = chunk.finish_reason
+                if chunk.text:
+                    text_parts.append(chunk.text)
+                    full_content += chunk.text
+                    if not first_token_yielded:
+                        first_token_yielded = True
+                        yield {
+                            "type": "llm_started",
+                            "trace_id": trace_id,
+                            "session_id": session_id,
+                        }
+                    if not use_tools:
+                        # Low-latency live path: flush speakable chunks as they arrive.
+                        buffer += chunk.text
+                        sentences, buffer = _extract_streaming_chunks(buffer)
+                        for sentence in sentences:
+                            async for event in _emit_tts(sentence, sentence_index):
+                                yield event
+                            sentence_index += 1
+
+            if use_tools and tool_calls and finish_reason == "tool_calls":
+                results: list[str] = []
+                for tool_call in tool_calls:
+                    result = tool_registry.execute(tool_call.function.name, tool_call.function.arguments)
+                    results.append(result)
+                    yield {
+                        "type": "tool_call",
+                        "trace_id": trace_id,
+                        "session_id": session_id,
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                        "result": result,
+                    }
+                round_messages.append(
+                    ChatMessage(role="assistant", content="".join(text_parts), tool_calls=tool_calls)
+                )
+                for tool_call, result in zip(tool_calls, results):
+                    round_messages.append(
+                        ChatMessage(role="tool", tool_call_id=tool_call.id, content=result)
+                    )
+                continue
+            final_text = "".join(text_parts)
+            break
+        else:
+            logger.warning("Tool loop exhausted after %d rounds; final text may be empty", MAX_TOOL_ROUNDS)
+
+        if use_tools:
+            # Keep only the final spoken text for history/emotion purposes.
+            full_content = final_text
+
+        if use_tools:
+            # Buffered path: speak the final text after the tool loop settles.
+            remaining = final_text.strip()
+            if remaining:
+                for sentence in split_sentences(remaining):
+                    async for event in _emit_tts(sentence, sentence_index):
+                        yield event
+                    sentence_index += 1
+        elif buffer.strip():
+            # Process remaining buffer after LLM finishes (live path).
+            for sentence in split_sentences(buffer.strip()):
+                async for event in _emit_tts(sentence, sentence_index):
+                    yield event
                 sentence_index += 1
 
         llm_processing_ms = int((perf_counter() - llm_start) * 1000)
@@ -297,7 +349,7 @@ class DialogueService:
 
         # Store session history.
         assistant_message = ChatMessage(role="assistant", content=cleaned_content or full_content)
-        llm_service.sessions.setdefault(session_id, []).extend([user_message, assistant_message])
+        llm_service.sessions.setdefault(session_id, []).extend([user_message, *round_messages, assistant_message])
         llm_service._save_sessions()
 
         llm_event: dict[str, object] = {
@@ -315,6 +367,61 @@ class DialogueService:
 
 
     async def stream_audio_pipeline(
+        self,
+        *,
+        trace_id: str,
+        audio_content: bytes,
+        filename: str | None,
+        session_id: str | None,
+        user_id: str | None,
+        language: str | None,
+        asr_provider: str | None,
+        asr_model: str | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+        llm_api_key: str | None,
+        tts_provider: str | None,
+        tts_model: str | None,
+        voice: str | None,
+        output_audio_format: str,
+        sample_rate: int,
+        system_prompt: str | None,
+        speaker_enabled: bool = False,
+        speaker_provider: str | None = None,
+        output_audio_codec: str = "pcm",
+    ) -> AsyncIterator[dict[str, object]]:
+        """Stream audio pipeline with per-session serialization."""
+        resolved_session = session_id or f"ses_{uuid4().hex}"
+        async with self._session_lock(resolved_session):
+            self._mark_active(resolved_session)
+            try:
+                async for event in self._stream_audio_pipeline_locked(
+                    trace_id=trace_id,
+                    audio_content=audio_content,
+                    filename=filename,
+                    session_id=resolved_session,
+                    user_id=user_id,
+                    language=language,
+                    asr_provider=asr_provider,
+                    asr_model=asr_model,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                    llm_api_key=llm_api_key,
+                    tts_provider=tts_provider,
+                    tts_model=tts_model,
+                    voice=voice,
+                    output_audio_format=output_audio_format,
+                    sample_rate=sample_rate,
+                    system_prompt=system_prompt,
+                    speaker_enabled=speaker_enabled,
+                    speaker_provider=speaker_provider,
+                    output_audio_codec=output_audio_codec,
+                ):
+                    yield event
+            finally:
+                self._mark_idle(resolved_session)
+
+    async def _stream_audio_pipeline_locked(
         self,
         *,
         trace_id: str,
@@ -450,6 +557,53 @@ class DialogueService:
         }
 
     async def stream_text_pipeline(
+        self,
+        *,
+        trace_id: str,
+        text: str,
+        session_id: str | None,
+        user_id: str | None,
+        language: str | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+        llm_api_key: str | None,
+        tts_provider: str | None,
+        tts_model: str | None,
+        voice: str | None,
+        output_audio_format: str,
+        sample_rate: int,
+        system_prompt: str | None,
+        output_audio_codec: str = "pcm",
+        image_base64: str | None = None,
+    ) -> AsyncIterator[dict[str, object]]:
+        """Stream text pipeline with per-session serialization."""
+        resolved_session = session_id or f"ses_{uuid4().hex}"
+        async with self._session_lock(resolved_session):
+            self._mark_active(resolved_session)
+            try:
+                async for event in self._stream_text_pipeline_locked(
+                    trace_id=trace_id,
+                    text=text,
+                    session_id=resolved_session,
+                    user_id=user_id,
+                    language=language,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                    llm_api_key=llm_api_key,
+                    tts_provider=tts_provider,
+                    tts_model=tts_model,
+                    voice=voice,
+                    output_audio_format=output_audio_format,
+                    sample_rate=sample_rate,
+                    system_prompt=system_prompt,
+                    output_audio_codec=output_audio_codec,
+                    image_base64=image_base64,
+                ):
+                    yield event
+            finally:
+                self._mark_idle(resolved_session)
+
+    async def _stream_text_pipeline_locked(
         self,
         *,
         trace_id: str,

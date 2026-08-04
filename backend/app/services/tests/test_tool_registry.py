@@ -62,3 +62,79 @@ class TestBuiltinTools:
     def test_builtin_tools_registered(self) -> None:
         assert "get_current_time" in tool_registry.names
         assert "get_weather" in tool_registry.names
+
+
+class TestToolLoop:
+    def test_dialogue_executes_tools_then_speaks_final_text(self, monkeypatch) -> None:
+        import asyncio
+
+        from app.core.config import get_settings
+        from app.models.llm import LLMStreamChunk, ToolCall, ToolCallFunction
+        from app.services.dialogue_service import dialogue_service
+        from app.services.llm_service import llm_service
+
+        state = {"called": False}
+
+        async def fake_chat_stream_detailed(trace_id, request):
+            if request.tools and not state["called"]:
+                state["called"] = True
+                yield LLMStreamChunk(text="让我查一下")
+                yield LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            function=ToolCallFunction(name="get_weather", arguments='{"city": "上海"}'),
+                        )
+                    ],
+                )
+            else:
+                yield LLMStreamChunk(text="上海今天晴，22度。")
+                yield LLMStreamChunk(finish_reason="stop")
+
+        monkeypatch.setattr(llm_service, "chat_stream_detailed", fake_chat_stream_detailed)
+        settings = get_settings()
+        original = settings.enable_function_calling
+        object.__setattr__(settings, "enable_function_calling", True)
+        session_id = "tool-loop-test"
+        llm_service.sessions.pop(session_id, None)
+        try:
+            async def run():
+                events = []
+                async for event in dialogue_service.stream_text_pipeline(
+                    trace_id="tool-trace",
+                    text="上海天气怎么样？",
+                    session_id=session_id,
+                    user_id=None,
+                    language="zh-CN",
+                    llm_provider="mock_llm",
+                    llm_model=None,
+                    llm_api_key=None,
+                    tts_provider="mock_tts",
+                    tts_model=None,
+                    voice=None,
+                    output_audio_format="wav",
+                    sample_rate=24000,
+                    system_prompt=None,
+                ):
+                    events.append(event)
+                return events
+
+            events = asyncio.run(run())
+        finally:
+            object.__setattr__(settings, "enable_function_calling", original)
+
+        types = [event["type"] for event in events]
+        assert "tool_call" in types
+        tool_events = [event for event in events if event["type"] == "tool_call"]
+        assert tool_events[0]["name"] == "get_weather"
+        import json
+
+        assert json.loads(tool_events[0]["result"])["city"] == "上海"
+        assert "tts_sentence" in types
+        llm_event = next(event for event in events if event["type"] == "llm")
+        assert "上海今天晴" in llm_event["text"]
+
+        roles = [message.role for message in llm_service.sessions.get(session_id, [])]
+        assert roles == ["user", "assistant", "tool", "assistant"]
+        llm_service.sessions.pop(session_id, None)

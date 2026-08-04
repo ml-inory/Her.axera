@@ -63,8 +63,12 @@
 ## 特性
 
 - **OpenAI 兼容 API**：`/v1/chat/completions`、`/v1/audio/transcriptions`、`/v1/audio/speech`
+- **OpenAI Realtime 兼容 WebSocket**：`/v1/realtime`，核心事件子集，可用 openai SDK 客户端直连
 - **WebSocket 实时对话**：`/v1/dialogue/ws`，支持流式 ASR → LLM → TTS 级联
 - **多 Provider 可插拔**：每个模块均支持 mock + 多种真实 Provider
+- **流式 Silero VAD**：free-talk 自动断句使用流式 VAD（迟滞 + 前导缓冲），替代能量阈值
+- **服务端工具调用**：`ENABLE_FUNCTION_CALLING=true` 时对话循环自动执行内置工具（get_current_time / get_weather）
+- **会话诊断**：`GET /v1/dialogue/sessions` 查看活跃会话与任务数
 
 | 模块 | 可用 Provider | 说明 |
 |------|--------------|------|
@@ -179,6 +183,36 @@ curl -X POST http://localhost:8080/v1/audio/speech \
 
 ```bash
 scripts/smoke_test.sh --host <AX650_IP> --port 8080
+```
+
+合成对话压测（逐轮输出 ASR/LLM/TTS 分段耗时）：
+
+```bash
+python scripts/synthetic_conversation_client.py --host <AX650_IP> --port 8080 --turns 5
+python scripts/synthetic_conversation_client.py --host <AX650_IP> --port 8080 --audio speech.wav
+```
+
+### 5. OpenAI Realtime 客户端示例
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://<AX650_IP>:8080/v1",
+    websocket_base_url="ws://<AX650_IP>:8080/v1",
+    api_key="not-needed",
+)
+
+with client.realtime.connect(model="local") as conn:
+    conn.send({
+        "type": "session.update",
+        "session": {
+            "instructions": "你是一个简洁、友好的语音助手。",
+            "her": {"asr_provider": "ax_asr", "llm_provider": "ax_llm", "tts_provider": "ax_tts"},
+        },
+    })
+    for event in conn:
+        print(event.type)
 ```
 ## 文档
 

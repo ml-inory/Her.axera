@@ -20,9 +20,12 @@ from app.models.llm import (
     ChatMessage,
     DeleteSessionMessagesResponse,
     LLMJobResponse,
+    LLMStreamChunk,
     SafetyResult,
     SessionMessagesResponse,
     TokenUsage,
+    ToolCall,
+    ToolCallFunction,
 )
 
 logger = logging.getLogger(__name__)
@@ -444,6 +447,12 @@ class LLMService:
 
     async def chat_stream(self, trace_id: str, request: ChatCompletionRequest) -> AsyncIterator[str]:
         """Stream LLM response token by token. Yields content delta strings."""
+        async for chunk in self.chat_stream_detailed(trace_id, request):
+            if chunk.text:
+                yield chunk.text
+
+    async def chat_stream_detailed(self, trace_id: str, request: ChatCompletionRequest) -> AsyncIterator[LLMStreamChunk]:
+        """Stream LLM response with text deltas and aggregated tool calls."""
         provider_name = request.provider or self.settings.default_llm_provider
         provider_info = self.providers.get(provider_name)
         if provider_info is None:
@@ -452,13 +461,79 @@ class LLMService:
             raise AppError("invalid_request", "messages must not be empty", status_code=400, stage="llm")
         if provider_name == "mock_llm":
             response = self._chat_mock(trace_id, request, provider_info.models[0], perf_counter())
-            for token in response.message.content.split("，"):
-                yield token if token.endswith("。") else f"{token}，"
+            tokens = response.message.content.split("，")
+            for token in tokens:
+                yield LLMStreamChunk(text=token if token.endswith("。") else f"{token}，")
+            yield LLMStreamChunk(finish_reason="stop")
             return
         if provider_name not in ("deepseek", "ax_llm", "openai_compat"):
             raise AppError("provider_not_found", f"LLM provider {provider_name} is not configured", status_code=404, stage="llm")
-        async for token in self._stream_openai_api(request, provider_name):
-            yield token
+        async for chunk in self._stream_openai_api_detailed(request, provider_name):
+            yield chunk
+
+    async def _stream_openai_api_detailed(self, request: ChatCompletionRequest, provider_name: str) -> AsyncIterator[LLMStreamChunk]:
+        """Stream OpenAI-compatible SSE, aggregating tool-call argument fragments."""
+        api_base, api_key, model = self._resolve_api(provider_name, request)
+        payload = self._build_payload(request, model, stream=True)
+        try:
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: requests.post(
+                    f"{api_base}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json=payload, timeout=self.settings.llm_request_timeout, stream=True,
+                ),
+            )
+        except requests.RequestException as exc:
+            raise AppError("provider_unavailable", f"{provider_name} stream request failed: {exc}", status_code=502, stage="llm", retryable=True) from exc
+        if response.status_code >= 400:
+            raise AppError("provider_error", f"{provider_name} returned {response.status_code}: {response.text[:500]}", status_code=502, stage="llm", retryable=response.status_code >= 500)
+
+        tool_accum: dict[int, dict] = {}
+        finish_reason: str | None = None
+        for line in response.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+            choices = data.get("choices") or []
+            if not choices:
+                continue
+            choice = choices[0]
+            delta = choice.get("delta") or {}
+            finish = choice.get("finish_reason")
+            if finish:
+                finish_reason = finish
+            content = delta.get("content")
+            if content:
+                yield LLMStreamChunk(text=content)
+            for tool_call in delta.get("tool_calls") or []:
+                index = int(tool_call.get("index", 0))
+                acc = tool_accum.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                if tool_call.get("id"):
+                    acc["id"] = tool_call["id"]
+                function = tool_call.get("function") or {}
+                if function.get("name"):
+                    acc["name"] = function["name"]
+                if function.get("arguments"):
+                    acc["arguments"] += function["arguments"]
+
+        if tool_accum:
+            tool_calls = [
+                ToolCall(
+                    id=acc["id"] or f"call_{index}",
+                    function=ToolCallFunction(name=acc["name"], arguments=acc["arguments"]),
+                )
+                for index, acc in sorted(tool_accum.items())
+            ]
+            yield LLMStreamChunk(finish_reason=finish_reason or "tool_calls", tool_calls=tool_calls)
+        elif finish_reason and finish_reason != "stop":
+            yield LLMStreamChunk(finish_reason=finish_reason)
 
     async def _stream_openai_api(self, request: ChatCompletionRequest, provider_name: str) -> AsyncIterator[str]:
         api_base, api_key, model = self._resolve_api(provider_name, request)

@@ -46,6 +46,68 @@ class TestMockChatCompletion:
             assert isinstance(chunk, str)  # stream returns text lines
 
 
+class FakeStreamResponse:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+        self.status_code = 200
+
+    def iter_lines(self, decode_unicode: bool = True):
+        yield from self._lines
+
+    @property
+    def text(self) -> str:
+        return ""
+
+
+class TestDetailedStreamToolCalls:
+    def test_aggregates_tool_call_deltas(self, monkeypatch) -> None:
+        import asyncio
+        import app.services.llm_service as llm_mod
+        from app.models.llm import ToolCall, ToolCallFunction
+
+        lines = [
+            'data: {"choices":[{"delta":{"role":"assistant","content":"让我查一下"}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":""}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"city\\":"}}]}}]}',
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"上海\\"}"}}]}}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+            "data: [DONE]",
+        ]
+        monkeypatch.setattr(llm_mod.requests, "post", lambda *a, **k: FakeStreamResponse(lines))
+        settings = llm_mod.get_settings()
+        original_key = settings.deepseek_api_key
+        object.__setattr__(settings, "deepseek_api_key", "test-key")
+        try:
+            async def run():
+                request = llm_mod.ChatCompletionRequest(
+                    messages=[llm_mod.ChatMessage(role="user", content="上海天气？")],
+                    provider="deepseek",
+                    model="deepseek-chat",
+                    tools=[{"type": "function"}],
+                )
+                text_parts = []
+                tool_calls = []
+                finish = None
+                async for chunk in llm_mod.llm_service.chat_stream_detailed("t", request):
+                    text_parts.append(chunk.text)
+                    tool_calls.extend(chunk.tool_calls)
+                    if chunk.finish_reason:
+                        finish = chunk.finish_reason
+                return text_parts, tool_calls, finish
+
+            text_parts, tool_calls, finish = asyncio.run(run())
+        finally:
+            object.__setattr__(settings, "deepseek_api_key", original_key)
+
+        assert "".join(text_parts) == "让我查一下"
+        assert finish == "tool_calls"
+        assert len(tool_calls) == 1
+        assert isinstance(tool_calls[0], ToolCall)
+        assert tool_calls[0].id == "call_1"
+        assert tool_calls[0].function.name == "get_weather"
+        assert tool_calls[0].function.arguments == '{"city":"上海"}'
+
+
 class TestSessionManagement:
     def test_list_sessions(self) -> None:
         sessions = llm_service.list_sessions()

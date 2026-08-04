@@ -1,6 +1,22 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from app.core.config import get_settings
 from app.services.wakeword_service import WakeWordService
+
+
+@pytest.fixture(autouse=True)
+def _restore_wakeword_globals():
+    """Restore shared wakeword globals after each test to avoid suite pollution."""
+    import app.services.wakeword_service as mod
+
+    settings = get_settings()
+    original_available = mod._oww_available
+    original_enable = settings.enable_wake_word
+    yield
+    mod._oww_available = original_available
+    object.__setattr__(settings, "enable_wake_word", original_enable)
 
 
 def _enable_wake_word(svc: WakeWordService, threshold: float = 0.5) -> None:

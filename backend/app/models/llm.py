@@ -1,4 +1,5 @@
 from typing import Any, Literal
+from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
@@ -53,6 +54,15 @@ class ChatCompletionRequest(BaseModel):
     tool_choice: str | dict[str, Any] | None = None
     safety: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass
+class LLMStreamChunk:
+    """One element of a detailed LLM stream (text deltas and tool calls)."""
+
+    text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    finish_reason: FinishReason | None = None
 
 
 class TokenUsage(BaseModel):
