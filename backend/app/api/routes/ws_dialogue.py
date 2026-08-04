@@ -7,6 +7,7 @@ import wave
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_settings
+from app.core.cancel_scope import CancelScope
 from app.core.errors import AppError
 from app.core.tracing import new_trace_id
 from app.services.asr_service import asr_service
@@ -50,6 +51,7 @@ class ConnectionState:
     def __init__(self) -> None:
         self.active_task: asyncio.Task | None = None
         self.active_turn_id: str | None = None
+        self.cancel_scope = CancelScope()
         self.buffers: dict[str, bytearray] = {}
         self.turn_options: dict[str, dict] = {}
         self.partial_sent: dict[str, bool] = {}
@@ -79,12 +81,20 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
     state = ConnectionState()
 
     async def send_event(event: dict) -> None:
+        generation = event.get("generation")
+        if generation is not None and state.cancel_scope.is_stale(generation):
+            return
         async with state.send_lock:
             await websocket.send_json(event)
 
     async def cancel_active(reason: str, replacement_turn_id: str | None = None) -> None:
+        had_active = state.active_task is not None and not state.active_task.done()
+        # Bump the generation on every turn boundary so detached tasks (e.g.
+        # partial ASR) from older turns are treated as stale.
+        state.cancel_scope.cancel()
         if state.active_task and not state.active_task.done():
             state.active_task.cancel()
+        if had_active:
             await send_event(
                 {
                     "type": "interrupted",
@@ -98,6 +108,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
 
     async def run_partial_asr(options: dict, trace_id: str, pcm: bytes, turn_id: str) -> None:
         """Run ASR on accumulated audio so far and send a partial result (display only)."""
+        generation = state.cancel_scope.generation
         try:
             sample_rate = int(options.get("input_sample_rate") or options.get("sample_rate") or 16000)
             channels = int(options.get("channels") or 1)
@@ -114,6 +125,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
             )
             await send_event({
                 "type": "asr_partial",
+                "generation": generation,
                 "trace_id": trace_id,
                 "turn_id": turn_id,
                 "text": result.text,
@@ -125,6 +137,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
             logger.debug("Partial ASR failed (non-fatal): %s", exc)
 
     async def run_audio_pipeline(request: dict, trace_id: str, audio_content: bytes, turn_id: str) -> None:
+        generation = state.cancel_scope.generation
         try:
             await send_event({"type": "asr_started", "trace_id": trace_id, "turn_id": turn_id})
             async for event in dialogue_service.stream_audio_pipeline(
@@ -150,6 +163,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                 output_audio_codec=request.get("output_audio_codec") or "pcm",
             ):
                 event["turn_id"] = turn_id
+                event["generation"] = generation
                 await send_event(event)
         except asyncio.CancelledError:
             return
@@ -183,6 +197,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
             )
 
     async def run_text_pipeline(request: dict, trace_id: str, turn_id: str) -> None:
+        generation = state.cancel_scope.generation
         try:
             async for event in dialogue_service.stream_text_pipeline(
                 trace_id=trace_id,
@@ -203,6 +218,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                 image_base64=request.get("image_base64"),
             ):
                 event["turn_id"] = turn_id
+                event["generation"] = generation
                 await send_event(event)
         except asyncio.CancelledError:
             return
