@@ -281,7 +281,16 @@ class ModelDownloadManager:
         for key, spec in self.specs.items():
             state = ModelDownloadState(spec=spec)
             if spec.required_files:
-                missing = [f for f in spec.required_files if not Path(f).exists()]
+                missing: list[str] = []
+                for required_file in spec.required_files:
+                    try:
+                        exists = Path(required_file).exists()
+                    except OSError:
+                        # Unreadable paths (e.g. /root on CI runners) are treated
+                        # as missing so the manager can start without crashing.
+                        exists = False
+                    if not exists:
+                        missing.append(required_file)
                 if not missing:
                     state.status = DownloadStatus.DOWNLOADED
                     state.progress_pct = 100.0
