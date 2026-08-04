@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
+import math
+import operator
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -50,6 +53,82 @@ def _get_weather(city: str = "北京", **_: Any) -> str:
     return json.dumps({"city": city, "temperature": "22°C", "condition": "晴", "humidity": "45%"})
 
 
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+_MATH_FUNCS = {
+    "abs": abs,
+    "round": round,
+    "sqrt": math.sqrt,
+    "min": min,
+    "max": max,
+    "sum": sum,
+}
+
+
+def _eval_expression(node: ast.AST) -> float:
+    """Safe evaluator: numbers, arithmetic operators and whitelisted functions."""
+    if isinstance(node, ast.Expression):
+        node = node.body
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
+        return _BIN_OPS[type(node.op)](_eval_expression(node.left), _eval_expression(node.right))
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _BIN_OPS:
+        return _BIN_OPS[type(node.op)](_eval_expression(node.operand))
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _MATH_FUNCS
+        and not node.keywords
+    ):
+        return _MATH_FUNCS[node.func.id](*[_eval_expression(arg) for arg in node.args])
+    raise ValueError("unsupported expression")
+
+
+def _calculate(expression: str = "1+1", **_: Any) -> str:
+    """Safe arithmetic evaluation for the voice assistant."""
+    try:
+        value = _eval_expression(ast.parse(expression, mode="eval"))
+        if isinstance(value, float) and not math.isfinite(value):
+            return json.dumps({"error": "result is not finite"})
+        if abs(value) > 1e15:
+            return json.dumps({"error": "result is too large"})
+        return json.dumps({"expression": expression, "result": value})
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"error": f"invalid expression: {exc}"})
+
+
+# In-memory todo list (process-local; resets on restart).
+_todos: list[str] = []
+
+
+def _add_todo(item: str = "", **_: Any) -> str:
+    if not item.strip():
+        return json.dumps({"error": "item is required"})
+    _todos.append(item.strip())
+    return json.dumps({"added": item.strip(), "count": len(_todos)})
+
+
+def _list_todos(**_: Any) -> str:
+    return json.dumps({"todos": _todos, "count": len(_todos)})
+
+
+def _clear_todos(**_: Any) -> str:
+    cleared = len(_todos)
+    _todos.clear()
+    return json.dumps({"cleared": cleared})
+
+
 tool_registry = ToolRegistry()
 
 tool_registry.register(
@@ -72,4 +151,48 @@ tool_registry.register(
         },
     },
     _get_weather,
+)
+
+tool_registry.register(
+    "calculate",
+    {
+        "description": "计算数学表达式，例如 \"(3+5)*2\" 或 \"sqrt(16)\"。支持 + - * / ** % 和 abs/round/sqrt/min/max/sum",
+        "parameters": {
+            "type": "object",
+            "properties": {"expression": {"type": "string", "description": "要计算的数学表达式"}},
+            "required": ["expression"],
+        },
+    },
+    _calculate,
+)
+
+tool_registry.register(
+    "add_todo",
+    {
+        "description": "添加一条待办事项",
+        "parameters": {
+            "type": "object",
+            "properties": {"item": {"type": "string", "description": "待办事项内容"}},
+            "required": ["item"],
+        },
+    },
+    _add_todo,
+)
+
+tool_registry.register(
+    "list_todos",
+    {
+        "description": "列出当前所有待办事项",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    _list_todos,
+)
+
+tool_registry.register(
+    "clear_todos",
+    {
+        "description": "清空所有待办事项",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    _clear_todos,
 )
