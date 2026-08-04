@@ -63,6 +63,27 @@ def _pcm_to_wav(pcm: bytes, *, sample_rate: int, channels: int = 1) -> bytes:
     return buffer.getvalue()
 
 
+def _prepare_audio(request: dict, audio_content: bytes, turn_id: str) -> tuple[bytes, str]:
+    """Normalize one-shot audio/utterance payloads to a WAV file for ASR.
+
+    ``encoding`` may be ``"pcm"`` (raw 16-bit LE PCM16, wrapped server-side)
+    or ``"wav"`` (default).  Chunk-based flows (speech_start/audio_chunk) are
+    always raw PCM16.
+    """
+    encoding = str(request.get("encoding") or request.get("transport") or "wav").lower()
+    if encoding == "pcm":
+        sample_rate = int(request.get("sample_rate") or request.get("input_sample_rate") or 16000)
+        channels = int(request.get("channels") or 1)
+        return _pcm_to_wav(audio_content, sample_rate=sample_rate, channels=channels), "wav"
+    return audio_content, encoding
+
+
+@router.get("/dialogue/sessions")
+async def dialogue_sessions() -> dict[str, object]:
+    """Diagnostics: sessions with active dialogue tasks."""
+    return {"sessions": dialogue_service.session_diagnostics()}
+
+
 @router.websocket("/dialogue/ws")
 async def dialogue_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -128,6 +149,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
         generation = state.cancel_scope.generation
         try:
             await send_event({"type": "asr_started", "trace_id": trace_id, "turn_id": turn_id})
+            audio_content, _ = _prepare_audio(request, audio_content, turn_id)
             async for event in dialogue_service.stream_audio_pipeline(
                 trace_id=trace_id,
                 audio_content=audio_content,
@@ -248,6 +270,7 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                 if message_type == "free_talk_start":
                     state.free_talk = True
                     state.free_talk_options = dict(request.get("options") or request)
+                    state.free_talk_options.setdefault("encoding", "pcm")
                     state.streaming_vad = StreamingSileroVAD()
                     await cancel_active("free_talk")
                     await send_event({

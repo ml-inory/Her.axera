@@ -120,6 +120,39 @@ def _extract_complete_sentences(buffer: str, max_chars: int = 80) -> tuple[list[
 class DialogueService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._active_sessions: dict[str, dict[str, object]] = {}
+
+    # ------------------------------------------------------------------
+    # Session isolation & diagnostics
+    # ------------------------------------------------------------------
+
+    def _session_lock(self, session_id: str) -> asyncio.Lock:
+        return self._session_locks.setdefault(session_id, asyncio.Lock())
+
+    def _mark_active(self, session_id: str) -> None:
+        info = self._active_sessions.setdefault(session_id, {"conns": 0, "tasks": 0, "last_active": 0.0})
+        info["tasks"] = int(info["tasks"]) + 1
+        info["last_active"] = perf_counter()
+
+    def _mark_idle(self, session_id: str) -> None:
+        info = self._active_sessions.get(session_id)
+        if info:
+            info["tasks"] = max(0, int(info["tasks"]) - 1)
+            if info["tasks"] == 0:
+                self._active_sessions.pop(session_id, None)
+
+    def session_diagnostics(self) -> list[dict[str, object]]:
+        """Snapshot of currently active dialogue sessions (for /v1/dialogue/sessions)."""
+        now = perf_counter()
+        return [
+            {
+                "session_id": sid,
+                "active_tasks": info["tasks"],
+                "last_active_s": round(now - float(info["last_active"]), 2),
+            }
+            for sid, info in sorted(self._active_sessions.items())
+        ]
 
     async def _streaming_llm_tts(
         self,
@@ -357,6 +390,61 @@ class DialogueService:
         speaker_provider: str | None = None,
         output_audio_codec: str = "pcm",
     ) -> AsyncIterator[dict[str, object]]:
+        """Stream audio pipeline with per-session serialization."""
+        resolved_session = session_id or f"ses_{uuid4().hex}"
+        async with self._session_lock(resolved_session):
+            self._mark_active(resolved_session)
+            try:
+                async for event in self._stream_audio_pipeline_locked(
+                    trace_id=trace_id,
+                    audio_content=audio_content,
+                    filename=filename,
+                    session_id=resolved_session,
+                    user_id=user_id,
+                    language=language,
+                    asr_provider=asr_provider,
+                    asr_model=asr_model,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                    llm_api_key=llm_api_key,
+                    tts_provider=tts_provider,
+                    tts_model=tts_model,
+                    voice=voice,
+                    output_audio_format=output_audio_format,
+                    sample_rate=sample_rate,
+                    system_prompt=system_prompt,
+                    speaker_enabled=speaker_enabled,
+                    speaker_provider=speaker_provider,
+                    output_audio_codec=output_audio_codec,
+                ):
+                    yield event
+            finally:
+                self._mark_idle(resolved_session)
+
+    async def _stream_audio_pipeline_locked(
+        self,
+        *,
+        trace_id: str,
+        audio_content: bytes,
+        filename: str | None,
+        session_id: str | None,
+        user_id: str | None,
+        language: str | None,
+        asr_provider: str | None,
+        asr_model: str | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+        llm_api_key: str | None,
+        tts_provider: str | None,
+        tts_model: str | None,
+        voice: str | None,
+        output_audio_format: str,
+        sample_rate: int,
+        system_prompt: str | None,
+        speaker_enabled: bool = False,
+        speaker_provider: str | None = None,
+        output_audio_codec: str = "pcm",
+    ) -> AsyncIterator[dict[str, object]]:
         start = perf_counter()
         session_id = session_id or f"ses_{uuid4().hex}"
         llm_service._ensure_meta(session_id)
@@ -469,6 +557,53 @@ class DialogueService:
         }
 
     async def stream_text_pipeline(
+        self,
+        *,
+        trace_id: str,
+        text: str,
+        session_id: str | None,
+        user_id: str | None,
+        language: str | None,
+        llm_provider: str | None,
+        llm_model: str | None,
+        llm_api_key: str | None,
+        tts_provider: str | None,
+        tts_model: str | None,
+        voice: str | None,
+        output_audio_format: str,
+        sample_rate: int,
+        system_prompt: str | None,
+        output_audio_codec: str = "pcm",
+        image_base64: str | None = None,
+    ) -> AsyncIterator[dict[str, object]]:
+        """Stream text pipeline with per-session serialization."""
+        resolved_session = session_id or f"ses_{uuid4().hex}"
+        async with self._session_lock(resolved_session):
+            self._mark_active(resolved_session)
+            try:
+                async for event in self._stream_text_pipeline_locked(
+                    trace_id=trace_id,
+                    text=text,
+                    session_id=resolved_session,
+                    user_id=user_id,
+                    language=language,
+                    llm_provider=llm_provider,
+                    llm_model=llm_model,
+                    llm_api_key=llm_api_key,
+                    tts_provider=tts_provider,
+                    tts_model=tts_model,
+                    voice=voice,
+                    output_audio_format=output_audio_format,
+                    sample_rate=sample_rate,
+                    system_prompt=system_prompt,
+                    output_audio_codec=output_audio_codec,
+                    image_base64=image_base64,
+                ):
+                    yield event
+            finally:
+                self._mark_idle(resolved_session)
+
+    async def _stream_text_pipeline_locked(
         self,
         *,
         trace_id: str,

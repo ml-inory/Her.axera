@@ -722,12 +722,12 @@ async function startRecording() {
   const processor = audioContext.createScriptProcessor(4096, 1, 1);
   const socket = openSocket();
   // Enter free talk mode — server handles VAD + utterance auto-split
-  sendWhenOpen(socket, { type: "free_talk_start", options: { input_sample_rate: audioContext.sampleRate, channels: 1, ...options() } });
+  sendWhenOpen(socket, { type: "free_talk_start", options: { input_sample_rate: audioContext.sampleRate, channels: 1, encoding: "pcm", ...options() } });
   processor.onaudioprocess = (event) => {
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN) return;
     const channel = event.inputBuffer.getChannelData(0);
     state.waveform = new Float32Array(channel);
-    state.socket.send(JSON.stringify({ type: "audio_chunk", audio_base64: pcm16ToBase64(floatToInt16(channel)) }));
+    state.socket.send(JSON.stringify({ type: "audio_chunk", encoding: "pcm", audio_base64: pcm16ToBase64(floatToInt16(channel)) }));
   };
   source.connect(processor);
   processor.connect(audioContext.destination);
