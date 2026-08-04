@@ -39,8 +39,8 @@ class TestSettings:
             assert s.app_name == "Her Voice Dialogue API"
             assert s.api_prefix == "/v1"
             assert s.default_asr_provider == "ax_asr"
-            assert s.default_llm_provider == "deepseek"
-            assert s.default_tts_provider == "edge_tts"
+            assert s.default_llm_provider == "ax_llm"
+            assert s.default_tts_provider == "ax_tts"
             assert s.llm_request_timeout == 60.0
             assert s.max_audio_size_mb == 20
             assert s.max_tts_text_length == 1000

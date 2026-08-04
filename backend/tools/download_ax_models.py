@@ -30,6 +30,27 @@ class ModelSpec:
 
 MODEL_SPECS: tuple[ModelSpec, ...] = (
     ModelSpec(
+        key="asr_sensevoice",
+        repo_id="AXERA-TECH/sensevoice.axera",
+        local_dir="SenseVoice",
+        aliases=("asr_sensevoice", "sensevoice", "asr", "ax_asr"),
+        env=(
+            ("AX_ASR_MODEL_TYPE", "sensevoice"),
+            ("AX_ASR_MODEL_PATH", "{path}"),
+            ("SENSEVOICE_REPO_PATH", "{path}"),
+        ),
+    ),
+    ModelSpec(
+        key="tts_kokoro",
+        repo_id="inoryQwQ/kokoro.best",
+        local_dir="tts",
+        aliases=("tts_kokoro", "kokoro", "tts", "ax_tts"),
+        env=(
+            ("AX_TTS_TYPE", "KOKORO"),
+            ("AX_TTS_MODEL_PATH", "{path}"),
+        ),
+    ),
+    ModelSpec(
         key="speaker",
         repo_id="AXERA-TECH/3D-Speaker-MT.Axera",
         local_dir="3D-Speaker-MT.Axera",
@@ -37,8 +58,8 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
         env=(
             ("ENABLE_SPEAKER_RECOGNITION", "true"),
             ("SPEAKER_REPO_PATH", "{path}"),
+            ("SPEAKER_MODEL_DIR", "{path}/axmodel"),
         ),
-        model_type="speaker",
     ),
 )
 

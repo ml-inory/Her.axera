@@ -366,6 +366,8 @@ async def dialogue_websocket(websocket: WebSocket) -> None:
                     state.buffers[chunk_turn_id].extend(chunk_data)
 
                     # Wake word detection on incoming chunk.
+                    detected = False
+                    ww_name = None
                     if wakeword_service.available():
                         options = state.turn_options.get(chunk_turn_id, {})
                         input_sr = int(options.get("input_sample_rate") or 16000)

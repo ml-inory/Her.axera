@@ -190,6 +190,39 @@ class ModelDownloadManager:
         with self._lock:
             return dict(self._states)
 
+    def get_states_by_type(self, model_type: str) -> dict[str, ModelDownloadState]:
+        """Return download states for specs whose model_type matches."""
+        with self._lock:
+            return {
+                key: state
+                for key, state in self._states.items()
+                if state.spec.model_type == model_type
+            }
+
+    def is_ready(self, model_type: str | None = None) -> bool:
+        """Return True when all tracked models (optionally of one type) are ready."""
+        states = self.get_states_by_type(model_type) if model_type else self.get_all_states()
+        if not states:
+            return False
+        return all(
+            state.status in (DownloadStatus.DOWNLOADED, DownloadStatus.NOT_NEEDED)
+            for state in states.values()
+        )
+
+    def start_download_all(self, model_type: str | None = None) -> list[str]:
+        """Start downloads for all pending models, optionally filtered by type.
+
+        Returns the keys of models whose download was actually started.
+        """
+        states = self.get_states_by_type(model_type) if model_type else self.get_all_states()
+        started: list[str] = []
+        for key, state in states.items():
+            if state.status in (DownloadStatus.DOWNLOADING, DownloadStatus.DOWNLOADED, DownloadStatus.NOT_NEEDED):
+                continue
+            if self.start_download(key):
+                started.append(key)
+        return started
+
     def start_download(self, key: str) -> bool:
         with self._lock:
             if key not in self._states:
@@ -235,6 +268,10 @@ class ModelDownloadManager:
 
     def add_progress_callback(self, cb: Callable) -> None:
         self._progress_callbacks.append(cb)
+
+    def on_progress(self, cb: Callable) -> None:
+        """Register a progress callback (alias of add_progress_callback)."""
+        self.add_progress_callback(cb)
 
     # ------------------------------------------------------------------
     # Internals
