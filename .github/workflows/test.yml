@@ -33,7 +33,7 @@ jobs:
           pip install pytest pytest-asyncio httpx
 
       - name: Run tests
-        run: python -m pytest app/ tests/ -v -k "not (ws or websocket or dialogue)" --tb=short
+        run: python -m pytest app/ tests/ -v --tb=short
 
   deploy-scripts:
     runs-on: ubuntu-latest
