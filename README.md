@@ -64,10 +64,11 @@
 
 - **OpenAI 兼容 API**：`/v1/chat/completions`、`/v1/audio/transcriptions`、`/v1/audio/speech`
 - **OpenAI Realtime 兼容 WebSocket**：`/v1/realtime`，核心事件子集，可用 openai SDK 客户端直连
+- **OpenAI Realtime WebRTC**：`POST /v1/realtime/calls` SDP 握手，音频走 RTP 媒体轨道、事件走 `oai-events` 数据通道
 - **WebSocket 实时对话**：`/v1/dialogue/ws`，支持流式 ASR → LLM → TTS 级联
 - **多 Provider 可插拔**：每个模块均支持 mock + 多种真实 Provider
 - **流式 Silero VAD**：free-talk 自动断句使用流式 VAD（迟滞 + 前导缓冲），替代能量阈值
-- **服务端工具调用**：`ENABLE_FUNCTION_CALLING=true` 时对话循环自动执行内置工具（get_current_time / get_weather）
+- **服务端工具调用**：`ENABLE_FUNCTION_CALLING=true` 时对话循环自动执行内置工具（get_current_time / get_weather / calculate / add_todo / list_todos / clear_todos）
 - **会话诊断**：`GET /v1/dialogue/sessions` 查看活跃会话与任务数
 
 | 模块 | 可用 Provider | 说明 |
