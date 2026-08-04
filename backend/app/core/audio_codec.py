@@ -1,4 +1,4 @@
-"""Opus audio encoding/decoding utilities.
+"""Audio encoding/decoding utilities.
 
 Requires the ``opuslib`` package (``pip install opuslib``) and the system
 ``libopus`` library.  All functions are optional – callers should check
@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import struct
 from io import BytesIO
+import wave
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,49 @@ except Exception:
 def opus_available() -> bool:
     return _opus_ok
 
+
+def wav_to_pcm16(wav_bytes: bytes) -> tuple[bytes, int] | None:
+    """Decode a mono/stereo 16-bit PCM WAV into raw PCM16.
+
+    Returns ``(pcm, sample_rate)`` or ``None`` when the payload is not a
+    readable 16-bit WAV.  Stereo channels are mixed down to mono.
+    """
+    try:
+        with wave.open(BytesIO(wav_bytes), "rb") as wav:
+            sample_rate = wav.getframerate()
+            channels = wav.getnchannels()
+            sampwidth = wav.getsampwidth()
+            frames = wav.readframes(wav.getnframes())
+    except (wave.Error, EOFError):
+        return None
+    if sampwidth != 2 or channels not in (1, 2):
+        return None
+    if channels == 1:
+        return frames, sample_rate
+    n = len(frames) // 4
+    if n == 0:
+        return b"", sample_rate
+    import array
+
+    stereo = array.array("h")
+    stereo.frombytes(frames[: n * 4])
+    mono = array.array("h")
+    for i in range(0, n, 1):
+        left = stereo[2 * i]
+        right = stereo[2 * i + 1]
+        mono.append((left + right) // 2)
+    return mono.tobytes(), sample_rate
+
+
+def pcm16_to_wav(pcm: bytes, *, sample_rate: int = 16000, channels: int = 1) -> bytes:
+    """Wrap raw PCM16 into a WAV container."""
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(channels)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return buffer.getvalue()
 
 def pcm_to_opus(
     pcm: bytes,
