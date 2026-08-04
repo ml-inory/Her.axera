@@ -62,6 +62,64 @@ class TestBuiltinTools:
     def test_builtin_tools_registered(self) -> None:
         assert "get_current_time" in tool_registry.names
         assert "get_weather" in tool_registry.names
+        assert "calculate" in tool_registry.names
+        assert "add_todo" in tool_registry.names
+        assert "list_todos" in tool_registry.names
+
+
+class TestCalculate:
+    def test_arithmetic(self) -> None:
+        import json
+
+        result = json.loads(tool_registry.execute("calculate", '{"expression": "(3+5)*2"}'))
+        assert result["result"] == 16
+
+    def test_power_and_sqrt(self) -> None:
+        import json
+
+        assert json.loads(tool_registry.execute("calculate", '{"expression": "2**10"}'))["result"] == 1024
+        assert json.loads(tool_registry.execute("calculate", '{"expression": "sqrt(16)"}'))["result"] == 4.0
+
+    def test_invalid_expression(self) -> None:
+        import json
+
+        assert "error" in json.loads(tool_registry.execute("calculate", '{"expression": "1+"}'))
+
+    def test_division_by_zero(self) -> None:
+        import json
+
+        assert "error" in json.loads(tool_registry.execute("calculate", '{"expression": "1/0"}'))
+
+    def test_injection_rejected(self) -> None:
+        import json
+
+        result = json.loads(
+            tool_registry.execute(
+                "calculate",
+                '{"expression": "__import__(\\"os\\").system(\\"echo hi\\")"}',
+            )
+        )
+        assert "error" in result
+
+
+class TestTodos:
+    def setup_method(self) -> None:
+        tool_registry.execute("clear_todos", "{}")
+
+    def test_add_and_list(self) -> None:
+        import json
+
+        tool_registry.execute("add_todo", '{"item": "买牛奶"}')
+        result = json.loads(tool_registry.execute("list_todos", "{}"))
+        assert "买牛奶" in result["todos"]
+        assert result["count"] == 1
+
+    def test_clear(self) -> None:
+        import json
+
+        tool_registry.execute("add_todo", '{"item": "x"}')
+        result = json.loads(tool_registry.execute("clear_todos", "{}"))
+        assert result["cleared"] == 1
 
 
 class TestToolLoop:
@@ -137,4 +195,69 @@ class TestToolLoop:
 
         roles = [message.role for message in llm_service.sessions.get(session_id, [])]
         assert roles == ["user", "assistant", "tool", "assistant"]
+        llm_service.sessions.pop(session_id, None)
+
+    def test_dialogue_loop_with_calculate(self, monkeypatch) -> None:
+        import asyncio
+
+        from app.core.config import get_settings
+        from app.models.llm import LLMStreamChunk, ToolCall, ToolCallFunction
+        from app.services.dialogue_service import dialogue_service
+        from app.services.llm_service import llm_service
+
+        state = {"called": False}
+
+        async def fake_chat_stream_detailed(trace_id, request):
+            if request.tools and not state["called"]:
+                state["called"] = True
+                yield LLMStreamChunk(
+                    finish_reason="tool_calls",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_calc",
+                            function=ToolCallFunction(name="calculate", arguments='{"expression": "6*7"}'),
+                        )
+                    ],
+                )
+            else:
+                yield LLMStreamChunk(text="结果是42。")
+                yield LLMStreamChunk(finish_reason="stop")
+
+        monkeypatch.setattr(llm_service, "chat_stream_detailed", fake_chat_stream_detailed)
+        settings = get_settings()
+        original = settings.enable_function_calling
+        object.__setattr__(settings, "enable_function_calling", True)
+        session_id = "tool-loop-calc"
+        llm_service.sessions.pop(session_id, None)
+        try:
+            async def run():
+                events = []
+                async for event in dialogue_service.stream_text_pipeline(
+                    trace_id="tool-calc",
+                    text="6乘以7等于多少？",
+                    session_id=session_id,
+                    user_id=None,
+                    language="zh-CN",
+                    llm_provider="mock_llm",
+                    llm_model=None,
+                    llm_api_key=None,
+                    tts_provider="mock_tts",
+                    tts_model=None,
+                    voice=None,
+                    output_audio_format="wav",
+                    sample_rate=24000,
+                    system_prompt=None,
+                ):
+                    events.append(event)
+                return events
+
+            events = asyncio.run(run())
+        finally:
+            object.__setattr__(settings, "enable_function_calling", original)
+
+        tool_events = [event for event in events if event["type"] == "tool_call"]
+        assert tool_events and tool_events[0]["name"] == "calculate"
+        assert "42" in tool_events[0]["result"]
+        llm_event = next(event for event in events if event["type"] == "llm")
+        assert "42" in llm_event["text"]
         llm_service.sessions.pop(session_id, None)
